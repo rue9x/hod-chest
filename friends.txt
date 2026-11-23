@@ -1,0 +1,5 @@
+# One line per friend: CHARACTER|auto BYTE [luck=N] [acc=0-2]
+# "auto" detects their character; Luck/accessories are read from the game unless given.
+# BYTE is their connection byte: usually 0x21 for the first friend, 0x22 for the next.
+# Narrow it down from their real drops with: python3 friend_byte.py add <Character> "<Item>"
+auto 0x21

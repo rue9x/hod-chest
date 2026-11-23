@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+chests.jsonl
+observations.json
+xex_image.bin
