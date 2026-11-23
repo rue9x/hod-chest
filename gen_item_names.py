@@ -73,7 +73,7 @@ def build(m):
 
 
 def write(names, path=OUT):
-    with open(path, 'w') as fh:
+    with open(path, 'w', encoding='utf-8') as fh:
         json.dump({f'0x{k:X}': v for k, v in sorted(names.items())}, fh, indent=1)
 
 

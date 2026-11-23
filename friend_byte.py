@@ -18,14 +18,14 @@ CHESTS, OBS = os.path.join(HERE, 'chests.jsonl'), os.path.join(HERE, 'observatio
 
 def load_chests():
     try:
-        return [json.loads(ln) for ln in open(CHESTS) if ln.strip()]
+        return [json.loads(ln) for ln in open(CHESTS, encoding='utf-8') if ln.strip()]
     except OSError:
         return []
 
 
 def load_obs():
     try:
-        return json.load(open(OBS))
+        return json.load(open(OBS, encoding='utf-8'))
     except (OSError, ValueError):
         return []
 
@@ -40,7 +40,7 @@ def main():
         if not chests:
             raise SystemExit('no logged chests yet')
         obs.append({'chest': chests[-1], 'char': sys.argv[2], 'item': sys.argv[3]})
-        json.dump(obs, open(OBS, 'w'), indent=1)
+        json.dump(obs, open(OBS, 'w', encoding='utf-8'), indent=1)
     m = Mem()
     per_char = {}
     for o in obs:

@@ -1,5 +1,5 @@
 """Build item_names.json from community (category, index) -> name list."""
-import json
+import json, os
 from chest_watch import BASE
 
 RAW = """
@@ -40,7 +40,7 @@ def main():
         if entry:
             cat, idx, name = entry.split(' ', 2)
             names[f'0x{BASE[int(cat, 16)] + int(idx, 16):X}'] = name
-    json.dump(names, open('item_names.json', 'w'), indent=1, sort_keys=True)
+    json.dump(names, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'item_names.json'), 'w', encoding='utf-8'), indent=1, sort_keys=True)
     print(len(names), 'names; 0x46 =', names['0x46'])
 
 

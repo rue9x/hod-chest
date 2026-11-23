@@ -1,1 +1,6 @@
-{ "name": "chest-pane", "version": "0.1.0", "description": "Live Harmony of Despair boss chest drop prediction pane", "types": "./types/index.d.ts" }
+{
+  "name": "hod-chest",
+  "version": "0.1.1",
+  "description": "Live Harmony of Despair boss-chest prediction in a pane beside the chat (/chest)",
+  "types": "./types/index.d.ts"
+}

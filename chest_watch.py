@@ -170,6 +170,68 @@ def read_chest(m, h):
     }
 
 
+_recipe_cache = {}
+
+
+_luck_acc_cache = {}
+
+
+def luck_accessories(m, cid):
+    """(max type-A, max type-B) luck items character `cid` can wear: 2 each, or fewer if it can equip fewer kinds
+    (each item counts once; two of the same item still count twice, so any equippable kind allows 2)."""
+    if cid in _luck_acc_cache:
+        return _luck_acc_cache[cid]
+    import pool
+    a = b = 0
+    for i in range(BASE[5] - BASE[4]):
+        try:
+            rec = armor_record(m, i)
+            eff = m.u16(rec + 0xE) if rec else 0
+            if eff in (0xE, 0xA) and (not cid or pool.allowed(m, BASE[4] + i, cid)):
+                a, b = (2, b) if eff == 0xE else (a, 2)
+        except ValueError:
+            continue
+    _luck_acc_cache[cid] = (a, b)
+    return a, b
+
+
+def luck_recipes(c, rng, wants, names, max_a=2, max_b=2):
+    """For this chest's fixed RNG state: [(item, acc_a, acc_b, lo, hi)] Luck ranges that drop a target."""
+    key = (rng, c['count'], tuple(c['entries']), tuple(wants), max_a, max_b)
+    if key in _recipe_cache:
+        return _recipe_cache[key]
+    out = []
+    for a in range(max_a + 1):
+        for b in range(max_b + 1):
+            run = None                          # (item, lo) of the open Luck range
+            for luck in range(302):
+                item = predict(c, rng, luck, a, b)[0] if luck <= 300 else None
+                hit = item if item is not None and wanted(item, wants, names) else None
+                if run and run[0] != hit:
+                    out.append((run[0], a, b, run[1], luck - 1))
+                    run = None
+                if hit and not run:
+                    run = (hit, luck)
+    if len(_recipe_cache) > 64:
+        _recipe_cache.clear()
+    _recipe_cache[key] = out
+    return out
+
+
+def fmt_recipes(recipes, names, luck, acc_a, acc_b):
+    """Recipes nearest your current Luck/accessories first."""
+    def cost(r):
+        _, a, b, lo, hi = r
+        dl = 0 if lo <= luck <= hi else min(abs(lo - luck), abs(hi - luck))
+        return (abs(a - acc_a) + abs(b - acc_b)) * 50 + dl
+    parts = []
+    for it, a, b, lo, hi in sorted(recipes, key=cost)[:4]:
+        lk = f'LCK {lo}' if lo == hi else f'LCK {lo}-{hi}'
+        parts.append(f'{names.get(it, hex(it))}: {lk} with acc {a}/{b}')
+    more = f' (+{len(recipes) - 4} more)' if len(recipes) > 4 else ''
+    return '; '.join(parts) + more
+
+
 def predict(c, rng, luck, acc_a, acc_b):
     n = c['count']
     div = 1 if acc_a + acc_b < 1 else 2 if acc_a + acc_b == 1 else 4
@@ -202,7 +264,7 @@ def predict(c, rng, luck, acc_a, acc_b):
 
 def load_names():
     try:
-        with open(NAMES_FILE) as fh:
+        with open(NAMES_FILE, encoding='utf-8') as fh:
             return {int(k, 0): v for k, v in json.load(fh).items()}
     except (OSError, ValueError):
         return {}
@@ -238,6 +300,45 @@ SESSION = 0x829034E0 + 0x20     # online session object; members at +0x17C (slot
 LOCAL_MEMBER_VT = 0x82068DA8
 SEED_BASE = 0x84                 # *(HANDLE_TABLE obj)+0x84: per-stage seed base, shared across players
 FRIENDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'friends.txt')
+WANT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'want.txt')
+
+
+def want_list(args):
+    """(target names lowercase, Luck cap or None, (max type-A, max type-B) luck items you own or None).
+    --want/--max-luck/--max-acc, else want.txt: one item name per line, plus optional
+    'maxluck=N' and 'maxacc=A/B' lines."""
+    raw, cap, acc = list(args.want or []), args.max_luck, args.max_acc
+    try:
+        with open(WANT_FILE, encoding='utf-8-sig') as fh:
+            lines = [ln.strip() for ln in fh if ln.strip() and not ln.startswith('#')]
+    except OSError:
+        lines = []
+    for ln in lines:
+        if ln.lower().startswith('maxacc='):
+            if acc is None:
+                try:
+                    acc = parse_acc(ln.split('=', 1)[1])
+                except ValueError:
+                    pass
+        elif ln.lower().startswith('maxluck='):
+            if cap is None:
+                try:
+                    cap = int(ln.split('=', 1)[1])
+                except ValueError:
+                    pass
+        elif not args.want:
+            raw.append(ln)
+    return [w.lower() for w in raw], cap, acc
+
+
+def parse_acc(text):
+    a, _, b = text.strip().partition('/')
+    return max(0, min(2, int(a))), max(0, min(2, int(b or 0)))
+
+
+def wanted(item, wants, names):
+    nm = (names.get(item) or '').lower()
+    return bool(nm) and any(w in nm for w in wants)
 
 
 def session_bytes(m):
@@ -272,7 +373,7 @@ def friend_list(args):
     raw = args.friend or []
     if not raw:
         try:
-            with open(FRIENDS_FILE) as fh:
+            with open(FRIENDS_FILE, encoding='utf-8-sig') as fh:
                 raw = [ln.strip() for ln in fh if ln.strip() and not ln.startswith('#')]
         except OSError:
             pass
@@ -301,14 +402,14 @@ CHESTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chests.j
 def save_snapshot(snap):
     """Append the chest to chests.jsonl once (dedup on key+base) for friend_byte.py."""
     try:
-        with open(CHESTS_FILE) as fh:
+        with open(CHESTS_FILE, encoding='utf-8') as fh:
             last = fh.read().strip().rsplit('\n', 1)[-1]
         prev = json.loads(last) if last else None
         if prev and (prev['key'], prev['base']) == (snap['key'], snap['base']):
             return
     except (OSError, ValueError):
         pass
-    with open(CHESTS_FILE, 'a') as fh:
+    with open(CHESTS_FILE, 'a', encoding='utf-8') as fh:
         fh.write(json.dumps(snap) + '\n')
 
 
@@ -325,7 +426,7 @@ def predict_other(m, snap, cid, byte, luck_steps=5, lucks=None, accs=(0, 1, 2)):
     return res
 
 
-def friend_lines(m, h, c, args, names):
+def friend_lines(m, h, c, args, names, hits=None):
     """Predict each friend's drop: seed = shared stage base + key + 1 + their connection byte."""
     import pool
     friends = friend_list(args)
@@ -368,6 +469,10 @@ def friend_lines(m, h, c, args, names):
                             lucks=[max(0, min(300, luck))] if luck is not None else None,
                             accs=(acc,) if acc is not None else (0, 1, 2))
         tag = f'byte {byte:#04x}' + (f', LCK {luck}' if luck is not None else '') + (f', acc {acc}' if acc is not None else '')
+        if hits is not None:
+            for it in res:
+                if wanted(it, args.wants, names):
+                    hits.append((cname, it, len(res) == 1))
         if len(res) == 1:
             out.append(f'  friend {cname} [{tag}]: WILL DROP {fmt_item(next(iter(res)), names)}')
         else:
@@ -376,7 +481,7 @@ def friend_lines(m, h, c, args, names):
     return out
 
 
-def report(m, chests, args, names):
+def report(m, chests, args, names, hits=None):
     lines = []
     est = None if args.luck is not None else estimate_luck(m)
     for h in chests:
@@ -400,6 +505,23 @@ def report(m, chests, args, names):
             acc_a, acc_b = (args.acc_a, args.acc_b) if args.acc_a is not None else estimate_accessories(m)
             src = 'override' if args.luck is not None else 'estimated from player'
         item, how, r, tot, weighted = predict(c, rng, luck, acc_a, acc_b)
+        if hits is not None and c['type'] == 4 and wanted(item, args.wants, names):
+            hits.append(('you', item, True))
+        elif hits is not None and c['type'] == 4 and args.wants and not c['snap']:
+            cap = args.luck_cap if args.luck_cap is not None else luck + 40
+            try:
+                me = local_player(m)
+                max_a, max_b = luck_accessories(m, character_id(m, me) if me else None)
+            except ValueError:
+                max_a, max_b = 2, 2
+            if args.acc_cap:
+                max_a, max_b = min(max_a, args.acc_cap[0]), min(max_b, args.acc_cap[1])
+            every = luck_recipes(c, rng, args.wants, names, max_a, max_b)
+            recipes = [(it, a, b, lo, min(hi, cap)) for it, a, b, lo, hi in every if lo <= cap]
+            if recipes:
+                hits.append(('you', recipes[0][0], 'reach:' + fmt_recipes(recipes, names, luck, acc_a, acc_b)))
+            elif every:
+                hits.append(('you', every[0][0], f'far:only at LCK {min(r[3] for r in every)}+, above your cap of {cap}'))
         lines.append(f'{CHEST_TYPES.get(c["type"], c["type"])} chest @ {h:08X}  state {c["state"]}  '
                      f'rng[{c["key"]}]={rng:08X}  LCK {luck} acc {acc_a}/{acc_b} ({src})')
         lines.append(f'  >>> WILL DROP: {fmt_item(item, names)}  via {how}  (roll {r}/{tot})')
@@ -417,13 +539,32 @@ def report(m, chests, args, names):
             except (ValueError, OSError):
                 pass
         try:
-            lines += friend_lines(m, h, c, args, names)
+            lines += friend_lines(m, h, c, args, names, hits if c['type'] == 4 else None)
         except ValueError:
             pass
     return lines
 
 
+def enable_console():
+    """Windows: UTF-8 output, and ANSI clear-screen support in classic consoles."""
+    import sys
+    if sys.platform != 'win32':
+        return
+    try:
+        sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    except (AttributeError, ValueError):
+        pass
+    if sys.stdout.isatty():
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.GetStdHandle(-11)                       # STD_OUTPUT_HANDLE
+        mode = ctypes.c_uint32()
+        if k.GetConsoleMode(h, ctypes.byref(mode)):
+            k.SetConsoleMode(h, mode.value | 0x0004)  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+
+
 def main():
+    enable_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--all', action='store_true', help='show every unopened chest, not just the boss chest')
     ap.add_argument('--luck', type=float, help='override LCK used before the game locks it in')
@@ -435,22 +576,62 @@ def main():
     ap.add_argument('--rescan', type=float, default=5.0, help='seconds between object rescans')
     ap.add_argument('--lo', type=lambda s: int(s, 16), default=0x40000000, help='scan start (hex)')
     ap.add_argument('--hi', type=lambda s: int(s, 16), default=0x50000000, help='scan end (hex)')
+    ap.add_argument('--want', action='append',
+                    help='target item name (substring, any case), repeatable; default: want.txt')
+    ap.add_argument('--max-acc', type=parse_acc,
+                    help="most luck items you own, as A/B (type A: Thief Ring, Ebisu Raiment; type B: Soul Eater Ring); "
+                         "default: maxacc= in want.txt, else 2/2 limited by what your character can equip")
+    ap.add_argument('--max-luck', type=int,
+                    help='highest LCK you can reach with gear swaps (default: maxluck= in want.txt, else current + 40)')
     args = ap.parse_args()
 
     names = load_names()
     m, chests, last_scan, last_out = Mem(), [], 0.0, None
+    bases, rang = set(), None    # stage seeds seen this run (= reroll count); base the bell last rang on
     while True:
         now = time.time()
         if now - last_scan > args.rescan:
             chests, last_scan = scan_chests(m, args.lo, args.hi), now
         ensure_names(m, names)
-        out = report(m, chests, args, names) or ['no unopened boss chest in this stage yet']
+        args.wants, args.luck_cap, args.acc_cap = want_list(args)
+        hits = []
+        out = report(m, chests, args, names, hits) or ['no unopened boss chest in this stage yet']
+        if args.wants and out[0].startswith('BOSS'):
+            try:
+                base = m.u32(m.u32(HANDLE_TABLE) + SEED_BASE)
+            except ValueError:
+                base = None
+            bases.add(base)
+            sure = [h for h in hits if h[2] is True]
+            reach = [h[2][6:] for h in hits if isinstance(h[2], str) and h[2].startswith('reach:')]
+            far = [h[2][4:] for h in hits if isinstance(h[2], str) and h[2].startswith('far:')]
+            hits = [h for h in hits if h[2] is False]
+            if sure:
+                who = ', '.join(f'{"you get" if nm == "you" else nm + " gets"} {names.get(it, hex(it))}' for nm, it, _ in sure)
+                head = f'*** TARGET HIT (load #{len(bases)}): {who}. Open the chest!'
+                if not args.once and rang != base:
+                    head += '\a'
+                    rang = base
+            elif reach:
+                head = (f'+++ TARGET REACHABLE (load #{len(bases)}): change gear BEFORE touching the chest. '
+                        + reach[0])
+            elif hits:
+                who = ', '.join(f'{nm} might get {names.get(it, hex(it))}' for nm, it, _ in hits)
+                head = f'??? TARGET POSSIBLE (load #{len(bases)}): {who}, depending on their Luck'
+            else:
+                head = f'--- no target this load (#{len(bases)}); reload. Want: {", ".join(args.wants)}'
+                if far:
+                    head += f' ({far[0]})'
+            unknown = [w for w in args.wants if not any(w in v.lower() for v in names.values())]
+            if unknown and names:
+                head += f'\n    (no item name contains: {", ".join(unknown)})'
+            out = [head] + out
         if args.once:
-            print('\n'.join(out))
+            print('\n'.join(out).replace('\a', ''))
             return
         if out != last_out:
             print('\033[2J\033[H' + time.strftime('%H:%M:%S') + '\n' + '\n'.join(out), flush=True)
-            last_out = out
+            last_out = [o.replace('\a', '') for o in out]
         time.sleep(args.interval)
 
 

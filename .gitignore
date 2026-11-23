@@ -1,5 +1,7 @@
+# Binaries and game dumps stay local
+xex_image.bin
+*.bin
 __pycache__/
 *.pyc
-chests.jsonl
-observations.json
-xex_image.bin
+# Engine-written type declarations for the mod
+sidebar-mod/.claude-plugin/types/
