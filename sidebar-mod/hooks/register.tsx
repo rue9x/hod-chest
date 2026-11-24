@@ -33,7 +33,8 @@ let token = ''
 // The running watcher, so /chest can stop it, and when it started (ms) to spot code changed since.
 let child: HookStream<ProcessSpawnChunk, ProcessSpawnResult> | undefined
 let startedAt = 0
-const CODE = ['chest_watch.py', 'pool.py', 'gmem.py', 'gen_item_names.py', 'build_names.py', 'txrc.py']
+const CODE = ['chest_watch.py', 'pool.py', 'gmem.py', 'gen_item_names.py', 'build_names.py', 'txrc.py',
+  'cheats/positions.py', 'cheats/loot.py', 'cheats/mastery.py']
 
 // True when a Python file the watcher loaded changed after it started.
 async function codeChanged($: Api): Promise<boolean> {

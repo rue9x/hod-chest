@@ -10,3 +10,6 @@ chests.jsonl
 observations.json
 # Built from your own game on first run
 item_names.json
+# Your saved positions (cheats/positions.py)
+cheats/positions.json
+cheats/loot_backup.json

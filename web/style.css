@@ -167,3 +167,55 @@ select {
 .stop:disabled { opacity: 0.6; cursor: default; }
 
 .error { color: var(--off); font-weight: 600; }
+
+.cheats {
+  margin-top: 28px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.cheats h2 { margin-top: 0; }
+
+.cheat-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 10px; margin: 8px 0; }
+
+.cheat-row select { max-width: 420px; }
+
+.activate {
+  padding: 6px 16px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--panel);
+  background: var(--reach);
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.activate:disabled { opacity: 0.5; cursor: default; }
+
+.cheats h3 { font-size: 14px; margin: 14px 0 4px; }
+
+.field input[type="search"] {
+  width: 220px;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.reset {
+  padding: 6px 14px;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.reset:disabled { opacity: 0.5; cursor: default; }

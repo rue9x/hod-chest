@@ -1263,6 +1263,64 @@ import secrets
 TOKEN = secrets.token_hex(8)    # this watcher's id: the sidebar sends it, so another watcher on the port refuses
 
 
+def cheat(name):
+    """A cheats/ module, reloaded each time: an edit to a cheat applies without restarting the watcher."""
+    import importlib
+    mod = importlib.import_module(f'cheats.{name}')
+    return importlib.reload(mod)
+
+
+def cheat_list():
+    """Names the page's Cheats dropdown offers: the positions saved with cheats/positions.py."""
+    try:
+        positions = cheat('positions')
+        return [{'name': n, 'kind': 'position', 'char': p.get('char', '?'),
+                 'x': round(p['x'][0], 1), 'y': round(p['y'][0], 1)} for n, p in positions.load().items()]
+    except (ImportError, OSError, ValueError, KeyError, TypeError):
+        return []
+
+
+def run_cheat(req):
+    """Run one cheat: {kind: 'position', name}, {kind: 'loot', item, all}, {kind: 'reset'} or
+    {kind: 'mastery'}.
+    The writing is all in cheats/; the predictor itself never writes."""
+    kind = str(req.get('kind', 'position'))
+    if kind == 'mastery-cancel':    # the page's Deactivate: stop a waiting 'mastery' (same module: no reload)
+        import importlib
+        return importlib.import_module('cheats.mastery').cancel()
+    if kind == 'mastery':           # waits up to 60 s for the next sub-weapon hit
+        mastery = cheat('mastery')
+        m = Mem()
+        try:
+            return mastery.max_next(m)
+        finally:
+            drop(m)
+    if kind in ('loot', 'reset'):
+        loot = cheat('loot')
+        m = Mem()
+        try:
+            if kind == 'reset':
+                return loot.reset(m)
+            return loot.set_loot(m, str(req.get('item', '')), everything=bool(req.get('all')))
+        finally:
+            drop(m)
+    if kind != 'position':
+        raise ValueError(f'unknown cheat {kind!r}')
+    name = str(req.get('name', ''))
+    positions = cheat('positions')
+    saved = positions.load()
+    if name not in saved:
+        raise ValueError(f'no cheat named {name!r}')
+    m = Mem()
+    try:
+        obj = positions.me(m)
+        positions.write_pos(m, obj, saved[name])
+        p = positions.read_pos(m, obj)
+    finally:
+        drop(m)
+    return f'Moved to {name}: X {p["x"][0]:.1f}, Y {p["y"][0]:.1f}'
+
+
 def serve(port):
     """Serve web/ and /state.json (the newest record) on localhost in a background thread."""
     import http.server, sys
@@ -1284,6 +1342,10 @@ def serve(port):
             path = self.path.split('?')[0]
             if path == '/state.json':
                 body, ctype = json.dumps({**LATEST, 'now': time.time()}).encode(), 'application/json'
+            elif path == '/cheats.json':    # the page's Cheats dropdown: saved positions
+                body, ctype = json.dumps({'cheats': cheat_list()}).encode(), 'application/json'
+            elif path == '/items.json':     # the page's loot cheat: every item name
+                body, ctype = json.dumps({'items': sorted(set(load_names().values()))}).encode(), 'application/json'
             elif path in WEB_FILES:
                 name, ctype = WEB_FILES[path]
                 try:
@@ -1305,9 +1367,17 @@ def serve(port):
             # one without a CORS preflight, which this server never answers), from this server's
             # own origin.
             ctype = self.headers.get('Content-Type', '').split(';')[0].strip().lower()
-            if (self.path not in ('/set', '/quit') or ctype != 'application/json'
+            if (self.path not in ('/set', '/quit', '/cheat') or ctype != 'application/json'
                     or self.headers.get('Origin', '') not in origins):
                 return self.reply(403, {'ok': False, 'said': 'refused: only this page can change the watcher'})
+            if self.path == '/cheat':   # the page's Cheats section: run one, in cheats/ (it writes to the game)
+                try:
+                    req = json.loads(self.rfile.read(min(int(self.headers.get('Content-Length', 0)), 4096)))
+                    return self.reply(200, {'ok': True, 'said': run_cheat(req)})
+                except (ValueError, TypeError, AttributeError, SystemExit) as e:
+                    return self.reply(400, {'ok': False, 'said': str(e)})
+                except Exception as e:      # noqa: BLE001 - say why on the page
+                    return self.reply(500, {'ok': False, 'said': f'cheat failed: {e!r}'})
             if self.path == '/quit':    # the page's Stop button: the main loop sees STOP and exits
                 self.reply(200, {'ok': True, 'said': 'Watcher stopped.'})
                 self.wfile.flush()      # answer before the main loop exits and takes this thread with it

@@ -327,4 +327,152 @@ function resetStop() {
   $('stop').textContent = 'Stop watcher';
 }
 
+// Cheats: saved positions (cheats/positions.py) to move to. They write to the game.
+let cheatKey = '';
+
+async function loadCheats() {
+  try {
+    const res = await fetch('cheats.json', { cache: 'no-store' });
+    if (res.status === 404) {       // a watcher started before cheats existed: it needs a restart
+      $('cheat-said').textContent = 'This watcher is older than the Cheats section: restart it (/chest, or run chest_watch.py again).';
+      $('cheat-said').className = 'error';
+      return;
+    }
+    const { cheats = [] } = await res.json();
+    const key = JSON.stringify(cheats);
+    const sel = $('cheat');
+    if (key !== cheatKey && document.activeElement !== sel) {
+      cheatKey = key;
+      const was = sel.value;
+      sel.replaceChildren();
+      if (!cheats.length) {
+        const o = document.createElement('option');
+        o.value = '';
+        o.textContent = 'No saved cheats yet (python3 cheats/positions.py save NAME)';
+        sel.append(o);
+      }
+      for (const c of cheats) {
+        const o = document.createElement('option');
+        o.value = c.name;
+        o.textContent = `Move to ${c.name} (${c.char}, X ${c.x}, Y ${c.y})`;
+        sel.append(o);
+      }
+      if (cheats.some(c => c.name === was)) sel.value = was;
+      $('activate').disabled = !cheats.length;
+    }
+  } catch {
+    // watcher gone: the status line already says so
+  } finally {
+    setTimeout(loadCheats, 5000);
+  }
+}
+
+$('activate').addEventListener('click', async () => {
+  const name = $('cheat').value;
+  if (!name) return;
+  const btn = $('activate');
+  btn.disabled = true;
+  $('cheat-said').textContent = 'Working…';
+  try {
+    const res = await fetch('cheat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'position', name }),
+    });
+    const out = await res.json().catch(() => ({}));
+    $('cheat-said').textContent = out.said || (res.ok ? 'Done.' : 'HTTP ' + res.status);
+    $('cheat-said').className = res.ok ? 'muted' : 'error';
+  } catch (err) {
+    $('cheat-said').textContent = `Couldn't run it: ${err.message || err}`;
+    $('cheat-said').className = 'error';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// Chest loot: make every chest drop one item, or put them back.
+let allItems = [];
+
+function fillItems() {
+  const sel = $('loot-item');
+  const want = squash($('loot-filter').value);
+  const was = sel.value;
+  const shown = allItems.filter(name => !want || squash(name).includes(want));
+  sel.replaceChildren();
+  for (const name of shown.slice(0, 500)) {
+    const o = document.createElement('option');
+    o.value = name;
+    o.textContent = name;
+    sel.append(o);
+  }
+  if (!shown.length) {
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = allItems.length ? 'No item matches the filter' : 'No item names yet (enter a stage)';
+    sel.append(o);
+  }
+  if (shown.includes(was)) sel.value = was;
+  $('loot-activate').disabled = !sel.value;
+}
+
+async function loadItems() {
+  try {
+    const res = await fetch('items.json', { cache: 'no-store' });
+    if (res.ok) allItems = (await res.json()).items || [];
+  } catch {
+    // watcher gone: the status line already says so
+  }
+  fillItems();
+  if (!allItems.length) setTimeout(loadItems, 5000);   // names not built yet: look again
+}
+
+async function runCheat(btn, change) {
+  btn.disabled = true;
+  $('cheat-said').textContent = 'Working…';
+  try {
+    const res = await fetch('cheat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(change),
+    });
+    const out = await res.json().catch(() => ({}));
+    $('cheat-said').textContent = out.said || (res.ok ? 'Done.' : 'HTTP ' + res.status);
+    $('cheat-said').className = res.ok ? 'muted' : 'error';
+  } catch (err) {
+    $('cheat-said').textContent = `Couldn't run it: ${err.message || err}`;
+    $('cheat-said').className = 'error';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+$('loot-filter').addEventListener('input', fillItems);
+$('loot-item').addEventListener('change', () => { $('loot-activate').disabled = !$('loot-item').value; });
+$('loot-activate').addEventListener('click', () => {
+  const item = $('loot-item').value;
+  if (item) runCheat($('loot-activate'), { kind: 'loot', item, all: $('loot-kind').value === 'all' });
+});
+$('loot-reset').addEventListener('click', () => runCheat($('loot-reset'), { kind: 'reset' }));
+$('mastery-activate').addEventListener('click', async () => {
+  $('mastery-deactivate').disabled = false;       // while it waits, it can be called off
+  const done = runCheat($('mastery-activate'), { kind: 'mastery' });
+  $('cheat-said').textContent = 'Waiting for your next sub-weapon hit (up to 60 seconds)…';
+  await done;
+  $('mastery-deactivate').disabled = true;
+});
+$('mastery-deactivate').addEventListener('click', async () => {
+  $('mastery-deactivate').disabled = true;
+  try {
+    await fetch('cheat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'mastery-cancel' }),
+    });
+  } catch {
+    // the waiting request reports the outcome either way
+  }
+});
+
+loadItems();
+loadCheats();
 poll();

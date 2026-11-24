@@ -38,6 +38,50 @@
     </table>
 
     <section id="lists"></section>
+
+    <section id="cheats" class="cheats">
+      <h2>Cheats</h2>
+      <p class="muted">These write to the game. Use them solo.</p>
+
+      <h3>Positions</h3>
+      <div class="cheat-row">
+        <label class="field">
+          <span>Move to</span>
+          <select id="cheat"><option value="">No saved positions yet</option></select>
+        </label>
+        <button id="activate" type="button" class="activate" disabled>Activate</button>
+      </div>
+
+      <h3>Chest loot</h3>
+      <div class="cheat-row">
+        <label class="field">
+          <span>Cheat</span>
+          <select id="loot-kind">
+            <option value="normal">All normal chests drop X</option>
+            <option value="all">All chests drop X (boss and gold too)</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>Filter items</span>
+          <input id="loot-filter" type="search" placeholder="Type to filter, e.g. muramasa" autocomplete="off">
+        </label>
+        <label class="field">
+          <span>Item (X)</span>
+          <select id="loot-item"><option value="">Loading items…</option></select>
+        </label>
+        <button id="loot-activate" type="button" class="activate" disabled>Activate</button>
+        <button id="loot-reset" type="button" class="reset">Reset chests</button>
+      </div>
+
+      <h3>Sub-weapon mastery</h3>
+      <div class="cheat-row">
+        <span class="muted">Next sub-weapon you hit something with gets 8 bars (max mastery).</span>
+        <button id="mastery-activate" type="button" class="activate">Activate</button>
+        <button id="mastery-deactivate" type="button" class="reset" disabled>Deactivate</button>
+      </div>
+
+      <p id="cheat-said" class="muted" role="status"></p>
+    </section>
   </main>
 </body>
 </html>

@@ -243,6 +243,12 @@ build your own view.
   address `0x100000000`, as it does on Linux, and stops with a message if it can't find the game
   image there.
 
+## Cheats
+
+`cheats/` holds tools that **write** to the game, such as saving your position and moving back
+to it. They're separate from the predictor, which never writes, and the web page's **Cheats**
+section runs them for you (pick one, press **Activate**). See [cheats/README.md](cheats/README.md).
+
 ## Research tools
 
 `ppcdis.py` and `xref.py` are reverse-engineering helpers. They need `xex_image.bin`, a dump of
