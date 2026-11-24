@@ -89,6 +89,7 @@ player's settings are:
 | Luck cap | The most Luck the gear suggestions may ask of them. Default: their Luck + 40 |
 | Luck items owned | How many type-A (Thief Ring, Ebisu Raiment) and type-B (Soul Eater Ring) items they have. Default: whatever their character can equip |
 | Luck (friends) | Overrides the Luck read from the game |
+| Thief Rings / Ebisu worn, Soul Eater Rings worn (friends) | Override the luck items read from the game (0-2 each; `--friend ... acc=A/B` does the same) |
 | Owns every luck item, Luck with no luck gear (friends) | Suggest whole outfits instead of Luck ranges (see below) |
 
 **Stop watcher**, at the top of the page, ends the watcher and the page with it (settings reset).
@@ -108,8 +109,11 @@ If the game's member list can't be read, name friends by hand with `--friend Cha
 down the right byte:
 
 ```
-python3 friend_byte.py add Richter "Megingiord"
+python3 friend_byte.py add Richter "Megingiord"              # their drop from the latest boss chest
+python3 friend_byte.py add Richter "Megingiord" SomeFriend   # say who, if two friends play Richter
 ```
+
+A friend's byte only holds for one session, so drops are grouped by character and friend.
 
 Boss chests are saved to `chests.jsonl` automatically for this.
 
@@ -169,8 +173,8 @@ pool item it is, so those loads can't be helped.
 
 ### Item names
 
-`item_names.json` lists item names for the base game and the DLC. If it's missing, the watcher
-rebuilds it from your own game the first time it runs in a stage. It does this by decrypting the
+`item_names.json` lists item names for the base game and the DLC you own. It isn't included: the
+watcher builds it from your own game the first time it runs in a stage. It does this by decrypting the
 game's text resources and reading the item databases from memory. After buying new DLC, run
 `python3 gen_item_names.py` while in a stage to refresh it.
 
@@ -241,6 +245,7 @@ build your own view.
 
 ## Research tools
 
-`ppcdis.py`, `xref.py` and `txrc.py` are reverse-engineering helpers. `ppcdis.py` and `xref.py`
-need `xex_image.bin`, a dump of the game's code taken from your own running game (not included),
-and `ppcdis.py` also needs `pip install capstone`. None of them are needed to use the predictor.
+`ppcdis.py` and `xref.py` are reverse-engineering helpers. They need `xex_image.bin`, a dump of
+the game's code taken from your own running game (not included), and `ppcdis.py` also needs
+`pip install capstone`. Neither is needed to use the predictor. `txrc.py` is: it decodes the
+game's text, which is where item names come from.

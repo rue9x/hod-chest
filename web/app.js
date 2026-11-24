@@ -4,17 +4,33 @@ const STALE_S = 15;
 
 const $ = id => document.getElementById(id);
 let lastRows = '';                  // the rows last drawn, so an open dropdown isn't rebuilt under you
+let touched = 0;                    // when a control was last used; a focused but idle one doesn't block redraws
+for (const ev of ['pointerdown', 'keydown', 'input', 'focusin']) {
+  document.addEventListener(ev, () => { touched = Date.now(); }, true);
+}
+// Escape closes a dropdown without a change: let go of it, so the table redraws right away.
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && document.activeElement && document.activeElement.tagName === 'SELECT') {
+    document.activeElement.blur();
+  }
+});
 
 // Same matching as chest_watch.py's squash(): no case, spaces, apostrophes or possessive 's.
 const squash = t => t.toLowerCase().replace(/['’]s/g, '').replace(/['’\s]+/g, '');
 
-function wantsOf(row) {
-  return row.want === 'None' ? [] : row.want.split(',').map(squash).filter(Boolean);
+// Same as chest_watch.py's matches(): a substring, or with a leading '=' (a pick from the list) that
+// exact item only.
+function matches(target, name) {
+  // Both forms of a possessive, as chest_watch.py's forms(): without the 's, and with the s kept.
+  const forms = t => [squash(t), t.toLowerCase().replace(/['\u2019\s]+/g, '')];
+  const exact = squash(target).startsWith('=');
+  const ts = forms(target).map(t => t.replace(/^=+/, '')).filter(Boolean);
+  const ns = forms(name || '').filter(Boolean);
+  return ts.some(t => ns.some(n => (exact ? t === n : n.includes(t))));
 }
 
 function isWanted(row, item) {
-  const s = squash(item);
-  return wantsOf(row).some(w => s.includes(w));
+  return (row.targets || []).some(t => matches(t, item));
 }
 
 function manipClass(text) {
@@ -46,7 +62,8 @@ function wantCell(row) {
     return o;
   };
   add('', 'None');
-  const items = [...new Set((row.odds || []).map(([item]) => item))].sort((a, b) => a.localeCompare(b));
+  // Every item their chest can give (known even when their Luck isn't, so odds are empty).
+  const items = [...new Set(row.items || (row.odds || []).map(([item]) => item))].sort((a, b) => a.localeCompare(b));
   const current = row.want === 'None' ? '' : row.want;
   let picked = current ? items.find(i => squash(i) === squash(current)) : '';
   if (current && !picked) {
@@ -71,10 +88,10 @@ async function save(input, change) {
     });
     const out = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(out.said || 'HTTP ' + res.status);
-    lastRows = '';                  // redraw with the watcher's next record
+    showError('');                  // the watcher's next record redraws with the change
   } catch (err) {
-    $('warn').hidden = false;
-    $('warn').textContent = `Couldn't save: ${err.message || err}`;
+    showError(`Couldn't save: ${err.message || err}`);
+    lastRows = '';                  // put the input back to what the watcher has
   } finally {
     input.disabled = false;
     input.blur();                   // let the next record redraw the table
@@ -99,7 +116,7 @@ function numberInput(row, name, placeholder) {
   input.max = '999';
   input.inputMode = 'numeric';
   input.placeholder = placeholder;
-  input.value = (row.settings || {})[name] || '';
+  input.defaultValue = input.value = (row.settings || {})[name] || '';   // defaultValue: what's saved
   input.addEventListener('change', () => save(input, { field: name, key: row.key, value: input.value }));
   return input;
 }
@@ -125,6 +142,26 @@ function settingsFor(row) {
 
   if (row.key !== 'you') {
     box.append(field('Luck', numberInput(row, 'luck', 'read from game')));
+    const worn = document.createElement('select');
+    for (const [v, text] of [['', 'read from game'], ['0', 'none'], ['1', '1'], ['2', '2']]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = text;
+      worn.append(o);
+    }
+    worn.value = set.acc || '';
+    worn.addEventListener('change', () => save(worn, { field: 'acc', key: row.key, value: worn.value }));
+    box.append(field('Thief Rings / Ebisu worn', worn));
+    const wornB = document.createElement('select');
+    for (const [v, text] of [['', 'read from game'], ['0', 'none'], ['1', '1'], ['2', '2']]) {
+      const o = document.createElement('option');
+      o.value = v;
+      o.textContent = text;
+      wornB.append(o);
+    }
+    wornB.value = set.accb || '';
+    wornB.addEventListener('change', () => save(wornB, { field: 'accb', key: row.key, value: wornB.value }));
+    box.append(field('Soul Eater Rings worn', wornB));
     const owns = document.createElement('input');
     owns.type = 'checkbox';
     owns.checked = set.owns === 'all';
@@ -134,6 +171,12 @@ function settingsFor(row) {
     box.append(field('Luck with no luck gear', numberInput(row, 'base', 'for outfits')));
   }
   return box;
+}
+
+// A failed save or stop stays on screen until the next one succeeds.
+function showError(text) {
+  $('error').hidden = !text;
+  $('error').textContent = text;
 }
 
 function clock(sec) {
@@ -153,8 +196,9 @@ function renderStatus(s, error) {
   $('updated').textContent = error ? '' : `Updated ${clock(s.changed)} (checked ${clock(s.at)})`;
   $('head').hidden = !s.head;
   $('head').textContent = s.head || '';
-  $('warn').hidden = !s.warn;
-  $('warn').textContent = s.warn || '';
+  const warn = [s.warn, s.web].filter(Boolean).join(' · ');
+  $('warn').hidden = !warn;
+  $('warn').textContent = warn;
 }
 
 function renderRows(rows) {
@@ -177,7 +221,7 @@ function renderRows(rows) {
       cell('Luck', r.luck, 'num'),
       wantCell(r),
       cell('Can manipulate', r.manip, manipClass(r.manip)),
-      cell('Expected drop', r.drop, 'drop' + (isWanted(r, r.drop) ? ' yes-now' : '')),
+      cell('Expected drop', r.drop, 'drop' + (!r.drop.startsWith('by ') && isWanted(r, r.drop) ? ' yes-now' : '')),
     );
     body.append(tr);
   }
@@ -202,15 +246,35 @@ function renderLists(rows) {
   }
 }
 
+function clearRows() {
+  if (lastRows === 'cleared') return;
+  lastRows = 'cleared';
+  renderRows([]);
+  renderLists([]);
+}
+
 async function poll() {
   try {
     const res = await fetch('state.json', { cache: 'no-store' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const s = await res.json();
+    seenAt = Date.now();
+    if (s.state !== 'stopped') resetStop();
     renderStatus(s);
+    if (s.now - (s.at || 0) >= STALE_S) {   // a watcher that stopped reporting: don't show its old verdict
+      clearRows();
+      return;
+    }
     const rows = s.rows || [];
     const key = JSON.stringify(rows);
-    const busy = document.activeElement && ['SELECT', 'INPUT'].includes(document.activeElement.tagName);
+    // Hold redraws only while a control is actually being used: a dropdown closed with Escape keeps
+    // focus, and the table must not freeze on an old verdict because of it.
+    // A dropdown gets a little longer (moving through its options fires no events), but not so long
+    // that the previous load's verdict lingers after clicking the option already chosen.
+    const el = document.activeElement;
+    const busy = el && (el.tagName === 'SELECT' ? Date.now() - touched < 8000
+      : el.tagName === 'INPUT' && (Date.now() - touched < 4000
+        || (el.type === 'number' && el.value !== el.defaultValue)));  // unsaved typing in a number box
     if (key !== lastRows && !busy) {
       lastRows = key;
       renderRows(rows);
@@ -218,23 +282,49 @@ async function poll() {
     }
   } catch (err) {
     renderStatus({}, err.message || String(err));
+    clearRows();                    // the watcher is gone: its last table (a YES, maybe) no longer holds
   } finally {
     setTimeout(poll, POLL_MS);
   }
 }
 
-// Ends the watcher process (and this page's server). /chest in Claude Code, or running
-// chest_watch.py again, starts it back up; settings reset.
+// Ends the watcher process (and this page's server). Running chest_watch.py again, or /chest in
+// Claude Code, starts it back up; settings reset.
+let stopped = false;                // Stop succeeded; cleared once a live watcher answers again
+let seenAt = 0;                     // when the watcher last answered a poll
+
 $('stop').addEventListener('click', async () => {
-  if (!confirm('Stop the watcher? The page goes offline and settings reset. /chest starts it again.')) return;
+  if (!confirm('Stop the watcher? This page goes offline and settings reset. ' +
+               'Run chest_watch.py again (or /chest in Claude Code) to start it back up.')) return;
   const btn = $('stop');
   btn.disabled = true;
+  let res;
   try {
-    await fetch('quit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    res = await fetch('quit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
   } catch {
-    // it may close the connection as it exits
+    res = null;                     // no reply: it stopped as it answered, or there was nothing to stop
   }
+  if (!res && Date.now() - seenAt > 5000) {
+    showError("There's no watcher to stop: it isn't running.");
+    btn.disabled = false;
+    return;
+  }
+  if (res && !res.ok) {
+    const out = await res.json().catch(() => ({}));
+    showError(`Couldn't stop the watcher: ${out.said || 'HTTP ' + res.status}`);
+    btn.disabled = false;
+    return;
+  }
+  stopped = true;
   btn.textContent = 'Stopped';
 });
+
+// The Stop button comes back once a running watcher answers again.
+function resetStop() {
+  if (!stopped) return;
+  stopped = false;
+  $('stop').disabled = false;
+  $('stop').textContent = 'Stop watcher';
+}
 
 poll();

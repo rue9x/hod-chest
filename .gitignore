@@ -8,3 +8,5 @@ sidebar-mod/.claude-plugin/types/
 # Local logs: your own chests and drop reports
 chests.jsonl
 observations.json
+# Built from your own game on first run
+item_names.json

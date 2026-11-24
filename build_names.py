@@ -1,4 +1,7 @@
-"""Build item_names.json from community (category, index) -> name list."""
+"""The community (category, index) -> name list, used by gen_item_names.py to fill gaps.
+
+Run on its own it writes item_names.json from this list only, and only when there's no fuller file
+already (the watcher and gen_item_names.py build the full list from your own game)."""
 import json, os
 from chest_watch import BASE
 
@@ -40,7 +43,17 @@ def main():
         if entry:
             cat, idx, name = entry.split(' ', 2)
             names[f'0x{BASE[int(cat, 16)] + int(idx, 16):X}'] = name
-    json.dump(names, open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'item_names.json'), 'w', encoding='utf-8'), indent=1, sort_keys=True)
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'item_names.json')
+    try:
+        with open(path, encoding='utf-8') as fh:
+            have = len(json.load(fh))
+    except (OSError, ValueError):
+        have = 0
+    if have > len(names):
+        raise SystemExit(f'item_names.json already has {have} names (built from your game); left alone. '
+                         'Run gen_item_names.py in a stage to refresh it.')
+    with open(path, 'w', encoding='utf-8') as fh:
+        json.dump(names, fh, indent=1, sort_keys=True)
     print(len(names), 'names; 0x46 =', names['0x46'])
 
 

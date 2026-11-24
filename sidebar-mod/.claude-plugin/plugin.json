@@ -1,11 +1,12 @@
 {
   "name": "hod-chest",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Live Harmony of Despair boss-chest prediction in a pane beside the chat (/chest)",
   "types": "./types/index.d.ts",
   "network": {
     "hosts": [
-      "localhost"
+      "localhost",
+      "127.0.0.1"
     ]
   }
 }

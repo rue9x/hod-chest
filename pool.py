@@ -14,15 +14,25 @@ CHARS = {1: 'Soma', 2: 'Alucard', 3: 'Jonathan', 4: 'Julius', 5: 'Richter', 6: '
          7: 'Charlotte', 8: 'Yoko', 9: 'Maria', 10: 'Simon', 11: 'Getsu Fuma'}
 
 
+SKIPPED = [0]   # DLC databases skipped as unreadable so far; build_pool won't cache across a skip
+
+
 def db_files(m, g):
     o = m.u32(g)
     f = m.u32(m.u32(o + 4) + 0x10)
     yield f, 0, m.u32(f + 8)
     for e in range(m.u32(o + 0x10), m.u32(o + 0x14), 0x3C):
-        h = m.u32(e + 0x2C)
-        f = m.u32(h + 0x10) if h else 0
+        try:                    # a DLC that isn't loaded (or owned) is skipped, not fatal
+            h = m.u32(e + 0x2C)
+            f = m.u32(h + 0x10) if h else 0
+            first, count = (m.u32(f + 0xC), m.u32(f + 8)) if f else (0, 0)
+        except ValueError:
+            SKIPPED[0] += 1
+            continue
         if f:
-            yield f, m.u32(f + 0xC), m.u32(f + 8)
+            yield f, first, count
+        else:
+            SKIPPED[0] += 1     # not loaded yet, or not owned: a pool built now may be short
 
 
 def record(m, g, stride, idx):
@@ -47,6 +57,8 @@ def build(m, table, pool_ids, char):
     """table: [(cat<<16|idx, weight)] from the chest record; returns (count, entries) like the chest object."""
     entries = []
     for packed, w in table:
+        if packed >> 16 >= len(BASE) - 1:      # categories 0-15; BASE[16] only marks where 15 ends
+            raise ValueError(f'bad item category in chest table: {packed:#x}')
         item = BASE[packed >> 16] + (packed & 0xFFFF)
         if w and allowed(m, item, char):
             entries.append((item, w * 10))

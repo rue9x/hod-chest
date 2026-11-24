@@ -26,37 +26,73 @@ class _LinuxMem(_Reads):
     def __init__(self, pid=None):
         import mmap
         self.pid = pid or self._find_pid()
-        path, self.regions = None, []
-        for line in open(f'/proc/{self.pid}/maps'):
-            parts = line.split()
-            if len(parts) < 6 or 'xenia_memory' not in parts[5] or 'r' not in parts[1]:
-                continue
-            s, e = (int(x, 16) for x in parts[0].split('-'))
-            if MEMBASE <= s < MEMBASE + GUEST_SIZE:
-                path = parts[5]
-                self.regions.append((s - MEMBASE, e - MEMBASE, int(parts[2], 16)))
+        path, self.regions = self._maps()
         if not path:
             raise SystemExit('could not find the game memory mapping')
-        self.fd = os.open(path, os.O_RDONLY)
-        self.mm = mmap.mmap(self.fd, 0, prot=mmap.PROT_READ)
+        fd = os.open(path, os.O_RDONLY)
+        try:
+            self.mm = mmap.mmap(fd, 0, prot=mmap.PROT_READ)
+        finally:
+            os.close(fd)        # the mapping keeps its own reference
+
+    def _maps(self):
+        """(backing file, [(guest start, guest end, file offset)]) for the game's readable guest
+        memory, from /proc/PID/maps; neighbours contiguous in guest and file merge into one."""
+        path, regions = None, []
+        with open(f'/proc/{self.pid}/maps') as fh:
+            for line in fh:
+                parts = line.split()
+                if len(parts) < 6 or 'xenia_memory' not in parts[5] or 'r' not in parts[1]:
+                    continue
+                s, e = (int(x, 16) for x in parts[0].split('-'))
+                if MEMBASE <= s < MEMBASE + GUEST_SIZE:
+                    path = parts[5]
+                    gs, ge, off = s - MEMBASE, e - MEMBASE, int(parts[2], 16)
+                    last = regions[-1] if regions else None
+                    if last and last[1] == gs and last[2] + (last[1] - last[0]) == off:
+                        regions[-1] = (last[0], ge, last[2])
+                    else:
+                        regions.append((gs, ge, off))
+        return path, regions
+
+    def refresh(self):
+        """Re-list readable memory: the emulator makes stage heaps readable after the watcher attaches.
+        The whole backing file stays mapped, so only the list of readable ranges changes."""
+        path, regions = self._maps()
+        if path:
+            self.regions = regions
+
+    def close(self):
+        self.mm.close()
 
     @staticmethod
     def _find_pid():
+        """The game's pid, from /proc (no pgrep needed: minimal systems don't have it)."""
         for name in PROCESS_NAMES:
-            out = subprocess.run(['pgrep', '-x', name], capture_output=True, text=True).stdout.split()
-            if out:
-                return int(out[0])
+            for d in sorted(os.listdir('/proc'), key=lambda x: (len(x), x)):
+                if not d.isdigit():
+                    continue
+                try:
+                    # comm is cut at 15 bytes, which can split a character: don't let that crash
+                    with open(f'/proc/{d}/comm', encoding='utf-8', errors='replace') as fh:
+                        if fh.read().strip() == name[:15]:     # comm holds the first 15 characters
+                            return int(d)
+                except OSError:
+                    continue                                    # exited meanwhile, or not ours to read
         raise SystemExit('the game is not running (looked for: ' + ', '.join(PROCESS_NAMES) + ')')
 
-    def off(self, addr):
+    def off(self, addr, n=1):
         for s, e, o in self.regions:
-            if s <= addr < e:
+            if s <= addr and addr + n <= e:
                 return o + (addr - s)
-        raise ValueError(f'unmapped guest addr {addr:08X}')
+        raise ValueError(f'unmapped guest addr {addr:08X}+{n:X}')
 
     def read(self, addr, n):
-        o = self.off(addr)
-        return self.mm[o:o + n]
+        o = self.off(addr, n)
+        data = self.mm[o:o + n]
+        if len(data) != n:      # past the end of the backing file
+            raise ValueError(f'short read at guest addr {addr:08X}')
+        return data
 
     def search(self, pat, lo=0, hi=0xFFFFFFFF):
         """Yield guest addresses where bytes/regex `pat` occurs."""
@@ -64,7 +100,8 @@ class _LinuxMem(_Reads):
         for s, e, o in self.regions:
             if e <= lo or s >= hi:
                 continue
-            for m in rx.finditer(self.mm, o, o + (e - s)):
+            a, b = max(s, lo), min(e, hi)       # only the asked-for part of the region
+            for m in rx.finditer(self.mm, o + (a - s), o + (b - s)):
                 yield s + (m.start() - o)
 
 
@@ -84,6 +121,7 @@ class _WindowsMem(_Reads):
                                         ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
         k.VirtualQueryEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
         k.VirtualQueryEx.restype = ctypes.c_size_t
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
         self.k = k
         self.pid = pid or self._find_pid()
         self.h = k.OpenProcess(0x0400 | 0x0010, False, self.pid)   # QUERY_INFORMATION | VM_READ
@@ -91,12 +129,18 @@ class _WindowsMem(_Reads):
             raise SystemExit(f'cannot open the game process (error {ctypes.get_last_error()})')
         self.base = MEMBASE
         if self._raw(self.base + XEX_BASE, 2) != b'MZ':
+            k.CloseHandle(self.h)       # retried every few seconds while the game starts: don't leak
             raise SystemExit('game memory not found at the expected address')
         self.regions = self._regions()
 
     @staticmethod
     def _find_pid():
-        out = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'], capture_output=True, text=True).stdout
+        try:
+            # tasklist writes in the console's code page: decode leniently, only the game's name matters
+            out = subprocess.run(['tasklist', '/FO', 'CSV', '/NH'], capture_output=True,
+                                 text=True, encoding='oem', errors='replace').stdout
+        except OSError as e:        # no tasklist: say why, the watcher keeps waiting
+            raise SystemExit(f"can't list processes to find the game: {e}")
         for line in out.splitlines():
             cols = [c.strip('"') for c in line.split('","')]
             if len(cols) > 1 and cols[0].lower().removesuffix('.exe') in PROCESS_NAMES:
@@ -134,6 +178,15 @@ class _WindowsMem(_Reads):
                     out.append((s - self.base, e - self.base))
             addr += size
         return out
+
+    def refresh(self):
+        """Re-list readable memory: the emulator commits stage heaps after the watcher attaches."""
+        self.regions = self._regions()
+
+    def close(self):
+        if self.h:
+            self.k.CloseHandle(self.h)
+            self.h = None
 
     def read(self, addr, n):
         data = self._raw(self.base + addr, n)
