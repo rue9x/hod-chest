@@ -1,23 +1,44 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Api, Register } from 'claude-code'
+import type { EngineInterface as Api, HookStream, ProcessSpawnChunk, ProcessSpawnResult, Register } from 'claude-code'
+import type { Row } from '../types'
 
 const PANE = 'hod-chest'
 const TITLE = 'Boss chest'
-const CLEAR = '\x1b[2J\x1b[H'
-const ANSI = /\x1b\[[0-9;?]*[A-Za-z]|\x07/g
 const HIT = '*** TARGET HIT'
 const REACH = '+++ TARGET REACHABLE'
 const PYTHONS: string[][] = [['python3'], ['py', '-3'], ['python']]
+// The watcher also serves the live table as a web page here.
+const PORT = 8765
+const URL = `http://localhost:${PORT}/`
 
 const watch = atom(
   { plugin: 'hod-chest', key: 'watch' } as const,
-  { frame: '', status: 'not started', active: false },
-  { shape: 'watch-2' },
+  { state: '', note: '', head: '', warn: '', changed: 0, at: 0, rows: [] as Row[], status: 'not started', active: false },
+  { shape: 'watch-5' },
 )
 
 // Module-local: a reload kills the child with the module, so this starts over too.
 // (A reload is also how a changed chest_watch.py gets picked up: session.start restarts it.)
 let running = false
+// The running watcher, so /chest can stop it, and when it started (ms) to spot code changed since.
+let child: HookStream<ProcessSpawnChunk, ProcessSpawnResult> | undefined
+let startedAt = 0
+const CODE = ['chest_watch.py', 'pool.py', 'gmem.py']
+
+// True when a Python file the watcher loaded changed after it started.
+async function codeChanged($: Api): Promise<boolean> {
+  const script = await findScript($)
+  if (!script || !startedAt) return false
+  for (const f of CODE) {
+    try {
+      if ((await $.fs.stat(`${dirOf(script)}/${f}`)).mtimeMs > startedAt) return true
+    } catch {
+      // missing file; ignore
+    }
+  }
+  return false
+}
+
 // The hit line last notified about; it names the load number, so each new hit differs.
 let lastHit = ''
 
@@ -25,63 +46,54 @@ function dirOf(path: string): string {
   return path.slice(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')))
 }
 
-// want.txt beside chest_watch.py: one target name per line, plus an optional `maxluck=N` line.
-async function wantFile($: Api): Promise<string | undefined> {
-  const script = await findScript($)
-  return script ? `${dirOf(script)}/want.txt` : undefined
-}
-
-async function readWantLines($: Api, path: string): Promise<string[]> {
-  try {
-    return (await $.fs.read(path)).split('\n').map(l => l.trim()).filter(Boolean)
-  } catch {
-    return []
+// Settings live in the watcher's memory only (they reset when it restarts); the watcher's page
+// server takes changes at POST /set, the same as the web page's controls.
+async function send($: Api, change: Record<string, string>): Promise<string> {
+  let last = ''
+  for (let i = 0; i < 20; i++) {   // the watcher may still be starting its server
+    try {
+      const r = await $.http.fetch(`${URL}set`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Origin: `http://localhost:${PORT}` },
+        body: JSON.stringify(change),
+      })
+      const out = JSON.parse(r.text || '{}') as { said?: string }
+      return out.said ?? (r.ok ? 'Saved.' : `The watcher refused it (HTTP ${r.status}).`)
+    } catch (err) {
+      last = String(err)
+      await $.clock.sleep(250)
+    }
   }
+  return `Couldn't reach the watcher at ${URL}: ${last}`
 }
 
-const isSetting = (line: string) => /^(maxluck|maxacc)=/i.test(line)
+const NOT_SAVED = 'Settings reset when the watcher restarts.'
 
-// `/chest want a, b` sets the targets; `/chest want` clears them. A Luck cap line is kept.
+// `/chest want a, Gamertag: b` sets the whole desired-drop list; `/chest want` clears it.
 async function setWants($: Api, args: string): Promise<string> {
-  const path = await wantFile($)
-  if (!path) return 'chest_watch.py not found, so there is nowhere to save want.txt.'
-  const wants = args.split(',').map(s => s.trim()).filter(Boolean)
-  const settings = (await readWantLines($, path)).filter(isSetting)
-  await $.fs.write(path, [...wants, ...settings].map(l => l + '\n').join(''))
-  return wants.length
-    ? `Watching for: ${wants.join(', ')}. Reload the stage until the pane says TARGET HIT or REACHABLE.`
-    : 'Targets cleared.'
+  const said = await send($, { field: 'wants', value: args.trim() })
+  return said.startsWith('Desired drop:') ? `${said}. Reload the stage until Can manipulate says YES or yes.` : said
 }
 
-// Replaces the `name=` line in want.txt with `name=value`, or removes it when value is empty.
-async function setSetting($: Api, name: string, value: string) {
-  const path = await wantFile($)
-  if (!path) return false
-  const keep = (await readWantLines($, path)).filter(l => !l.toLowerCase().startsWith(name + '='))
-  await $.fs.write(path, [...keep, ...(value ? [`${name}=${value}`] : [])].map(l => l + '\n').join(''))
-  return true
-}
-
-// `/chest maxluck N` caps the Luck the gear suggestions may ask for; `/chest maxluck` resets it.
+// `/chest maxluck N` caps the Luck the gear suggestions may ask of you; `/chest maxluck` resets it.
 async function setCap($: Api, args: string): Promise<string> {
   const n = args.trim()
   if (n && !/^\d+$/.test(n)) return 'Give the cap as a whole number, like /chest maxluck 80.'
-  if (!(await setSetting($, 'maxluck', n))) return 'chest_watch.py not found, so there is nowhere to save want.txt.'
-  return n ? `Suggestions now stay at or below LCK ${n}.` : 'Luck cap reset to your current Luck + 40.'
+  await send($, { field: 'maxluck', key: 'you', value: n })
+  return n ? `Suggestions now stay at or below LCK ${n}. ${NOT_SAVED}` : 'Luck cap reset to your current Luck + 40.'
 }
 
 // `/chest maxacc A/B`: how many type-A / type-B luck items you own; `/chest maxacc` resets it.
 async function setAcc($: Api, args: string): Promise<string> {
   const v = args.trim()
   if (v && !/^[0-2](\/[0-2])?$/.test(v)) return 'Give it as A/B, each 0-2, like /chest maxacc 1/0.'
-  if (!(await setSetting($, 'maxacc', v))) return 'chest_watch.py not found, so there is nowhere to save want.txt.'
+  await send($, { field: 'maxacc', key: 'you', value: v })
   return v
-    ? `Suggestions now use at most ${v} luck items (type A: Thief Ring, Ebisu Raiment; type B: Soul Eater Ring).`
+    ? `Suggestions now use at most ${v} luck items (type A: Thief Ring, Ebisu Raiment; type B: Soul Eater Ring). ${NOT_SAVED}`
     : 'Luck-item limit reset to what your character can equip.'
 }
 
-async function noteHit($: Api, frame: string) {
-  const head = frame.split('\n')[0] ?? ''
+async function noteHit($: Api, head: string) {
   if (!head.startsWith(HIT) && !head.startsWith(REACH)) return
   if (head === lastHit) return
   lastHit = head
@@ -140,30 +152,46 @@ async function start($: Api) {
     await setStatus($, `starting ${py.join(' ')} chest_watch.py`)
 
     // UTF-8 on every OS: Windows would otherwise pipe item names in its legacy code page.
-    const child = $.process.spawn({
-      argv: [...py, '-u', script],
+    const proc = $.process.spawn({
+      argv: [...py, '-u', script, '--json', '--serve', String(PORT)],
       cwd: dir,
       env: { PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1' },
     })
+    child = proc
+    startedAt = Date.now()
     let buf = ''
     let errTail = ''
-    for await (const { stream, text } of child) {
+    for await (const { stream, text } of proc) {
       if (stream === 'stderr') {
         errTail = (errTail + text).slice(-2000)
         continue
       }
+      // One JSON record per line; only the newest whole one matters.
       buf += text
-      const parts = buf.split(CLEAR)
-      // Keep only the newest frame; it is whole once it ends in a newline.
-      buf = parts[parts.length - 1] ?? ''
-      const done = buf.endsWith('\n') ? buf : (parts[parts.length - 2] ?? '')
-      if (done.trim()) {
-        const frame = done.replace(ANSI, '').replace(/\s+$/, '')
-        await update($, watch, w => ({ ...w, frame, status: 'live' }))
-        await noteHit($, frame)
+      const lines = buf.split('\n')
+      buf = lines.pop() ?? ''
+      const last = lines.filter(l => l.trim()).pop()
+      if (!last) continue
+      let rec: { state: string; note: string; head: string; warn?: string; changed: number; rows: Row[] }
+      try {
+        rec = JSON.parse(last)
+      } catch {
+        continue
       }
+      await update($, watch, w => ({
+        ...w,
+        state: rec.state,
+        note: rec.note,
+        head: rec.head,
+        warn: rec.warn ?? '',
+        rows: rec.rows,
+        changed: Math.round(rec.changed * 1000),
+        status: 'running',
+        at: Date.now(),
+      }))
+      await noteHit($, rec.head)
     }
-    const end = await child.result
+    const end = await proc.result.catch(() => undefined)
     const why = end?.signal ? `signal ${end.signal}` : `code ${end?.code}`
     const err = errTail.trim().split('\n').slice(-3).join(' | ')
     await setStatus($, `watcher exited (${why})${err ? ': ' + err : ''}. /chest restarts it`)
@@ -171,6 +199,7 @@ async function start($: Api) {
     await setStatus($, `watcher failed: ${String(err)}`)
   } finally {
     running = false
+    child = undefined
   }
 }
 
@@ -178,7 +207,7 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'chest',
-      description: 'Open the HoD boss-chest pane; "/chest want Item, Item" sets targets, "/chest maxluck N" and "/chest maxacc A/B" set limits',
+      description: 'Open the HoD boss-chest pane; "/chest want Item, Gamertag: Item" sets the desired drop (also: wants, wanted, desire, desired), "/chest maxluck N" and "/chest maxacc A/B" set limits',
     })
     // A reload killed the old module's watcher; bring it back if /chest had started one.
     if ((await read($, watch)).active) {
@@ -189,9 +218,19 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'chest' }, async ($, e) => {
-    const want = /^\s*want\b(.*)$/i.exec(e.args)
+    const want = /^\s*(?:wants?|wanted|desires?|desired)\b(.*)$/i.exec(e.args)
     const cap = /^\s*maxluck\b(.*)$/i.exec(e.args)
     const acc = /^\s*maxacc\b(.*)$/i.exec(e.args)
+    await update($, watch, w => ({ ...w, active: true }))
+    const opened = await $.ui.open({ id: PANE, title: TITLE })
+    if (running && child && (await codeChanged($))) {
+      await setStatus($, 'watcher code changed, restarting')
+      // Leaving the stream kills the child; the start() loop then ends and clears `running`.
+      // Not awaited: a pull already waiting on the child may hold the return until the child exits.
+      void child.return({} as ProcessSpawnResult).catch(() => undefined)
+      for (let i = 0; i < 50 && running; i++) await $.clock.sleep(100)
+    }
+    void start($)
     const said = want
       ? await setWants($, want[1] ?? '')
       : cap
@@ -199,37 +238,93 @@ export const register: Register = on => {
         : acc
           ? await setAcc($, acc[1] ?? '')
           : 'Boss chest pane opened.'
-    await update($, watch, w => ({ ...w, active: true }))
-    await $.ui.open({ id: PANE, title: TITLE })
-    void start($)
-    return { text: said }
+    const w = await read($, watch)
+    const age = w.at ? `${Math.round((Date.now() - w.at) / 1000)}s ago` : 'none yet'
+    const pane = opened.isPlaced ? 'pane drawn' : `pane NOT drawn: ${opened.reason}`
+    return { text: `${said} Web table: ${URL} [${pane}; watcher ${w.status}; last report ${age}; ${w.rows.length} player(s)]` }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text } = $.ui.resolve(e)
-    const { frame, status } = await read($, watch)
-    const lines = frame ? frame.split('\n') : []
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 3)
+    const w = await read($, watch)
+    const live = running && (w.state === 'live' || w.state === 'no chest')
+    const why = !running
+      ? `watcher not running (${w.status})`
+      : w.state === 'waiting'
+        ? w.note
+        : w.state
+          ? w.note || w.state
+          : 'starting the watcher'
+    const clock = (ms: number) => (ms ? new Date(ms).toLocaleTimeString() : 'never')
+    const cols: [keyof Row, string, string][] = [
+      ['player', 'Player', '15%'],
+      ['char', 'Character', '13%'],
+      ['luck', 'Luck', '8%'],
+      ['want', 'Desired drop', '16%'],
+      ['manip', 'Can manipulate', '26%'],
+      ['drop', 'Expected drop', '22%'],
+    ]
+    const manipColor = (t: string) =>
+      t.startsWith('YES') ? 'green' : t.startsWith('yes') ? 'cyan' : t.startsWith('maybe') ? 'yellow' : undefined
+    // Same matching as chest_watch.py's squash(): no case, spaces, apostrophes or possessive 's.
+    const squash = (t: string) => t.toLowerCase().replace(/['\u2019]s/g, '').replace(/['\u2019\s]+/g, '')
+    const wants = (r: Row) => (r.want === 'None' ? [] : r.want.split(',').map(squash).filter(Boolean))
+    const isWanted = (r: Row, item: string) => wants(r).some(x => squash(item).includes(x))
 
     return (
       <Box flexDirection="column">
-        {lines.length === 0 && <Text dimColor>Waiting for chest_watch.py…</Text>}
-        {lines.slice(0, room).map(line =>
-          line.startsWith(HIT) ? (
-            <Text bold inverse color="green">{line}</Text>
-          ) : line.startsWith(REACH) ? (
-            <Text bold color="cyan">{line}</Text>
-          ) : line.startsWith('???') ? (
-            <Text bold color="yellow">{line}</Text>
-          ) : line.startsWith('---') ? (
-            <Text dimColor>{line}</Text>
-          ) : line.includes('WILL DROP') ? (
-            <Text bold color="green">{line}</Text>
-          ) : (
-            <Text>{line || ' '}</Text>
-          ),
+        {live ? (
+          <Text bold color="green">● Live{w.state === 'no chest' ? ': no boss chest in this stage yet' : ''}</Text>
+        ) : (
+          <Text bold color="red">○ Not live: {why}</Text>
         )}
-        <Text dimColor>{status}</Text>
+        <Text dimColor>
+          Updated {clock(w.changed)}
+          {w.at ? ` (checked ${clock(w.at)})` : ''} · {URL}
+        </Text>
+        {w.warn ? <Text color="yellow">{w.warn}</Text> : null}
+        <Text> </Text>
+        <Box flexDirection="row">
+          {cols.map(([, label, width]) => (
+            <Box width={width} paddingRight={1}>
+              <Text bold underline>{label}</Text>
+            </Box>
+          ))}
+        </Box>
+        {w.rows.length === 0 && <Text dimColor>No players yet. They show up once you're in a stage with a boss chest.</Text>}
+        {w.rows.map(r => (
+          <Box flexDirection="row">
+            {cols.map(([key, , width]) => (
+              <Box width={width} paddingRight={1}>
+                {key === 'manip' ? (
+                  <Text color={manipColor(r.manip)} bold={r.manip.startsWith('YES')}>{r.manip}</Text>
+                ) : key === 'drop' ? (
+                  <Text bold color={isWanted(r, r.drop) ? 'green' : undefined}>{r.drop}</Text>
+                ) : key === 'want' && r.want === 'None' ? (
+                  <Text dimColor>None</Text>
+                ) : (
+                  <Text>{String(r[key])}</Text>
+                )}
+              </Box>
+            ))}
+          </Box>
+        ))}
+        {w.rows.filter(r => r.odds.length).map(r => (
+          <Box flexDirection="column" marginTop={1}>
+            <Text bold>
+              Drop list: {r.player} ({r.char})
+            </Text>
+            <Text wrap="wrap">
+              {r.odds.slice(0, 12).map(([item, pct], i) => (
+                <Text color={isWanted(r, item) ? 'green' : undefined} bold={item === r.drop}>
+                  {i ? ', ' : ''}
+                  {item} {pct}%
+                </Text>
+              ))}
+              {r.odds.length > 12 ? <Text dimColor>, +{r.odds.length - 12} more</Text> : ''}
+            </Text>
+          </Box>
+        ))}
       </Box>
     )
   })

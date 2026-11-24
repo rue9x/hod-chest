@@ -33,24 +33,58 @@ Windows Terminal and in the classic console, and item names print as UTF-8 eithe
 python3 chest_watch.py           # live view; refreshes when anything changes
 python3 chest_watch.py --once    # one snapshot
 python3 chest_watch.py --all     # every unopened chest, not just the boss chest
+python3 chest_watch.py --json    # one JSON record per refresh: status plus a row per player
+python3 chest_watch.py --serve 8765   # also a live HTML table at http://localhost:8765/
 python3 players.py               # each player's detected character, Luck and luck accessories
 ```
 
 The boss chest shows up as soon as the stage loads. The prediction becomes final when you touch
 the chest, which is when the game locks in your Luck. Equipment changes before then can change it.
 
-### Co-op (`friends.txt`)
+### Settings reset every run
+
+Nothing you set is saved. Desired drops, Luck caps, luck items owned and friends' details all
+live in the watcher's memory and reset when it restarts. Set them on the web page (below), with
+the sidebar's `/chest` commands, or with command-line flags at start-up.
+
+### Live web table (`--serve`)
+
+```
+python3 chest_watch.py --serve 8765
+```
+
+Then open http://localhost:8765/. The page is served to your own computer only (`127.0.0.1`), and
+refreshes every second. It shows:
+
+- **Live** or **Not live**, with the reason: the watcher stopped, the game isn't running, or the
+  game is still starting
+- when the prediction last changed, and when the watcher last checked
+- one row per player: **Player** (gamertag), **Character**, **Luck**, **Desired drop**, **Can
+  manipulate** and **Expected drop**
+- under the table, each player's settings and their drop list with the odds at their current Luck
+
+Each row's **Desired drop** is a dropdown of that player's possible drops; `None` clears it. Each
+player's settings are:
+
+| Setting | What it does |
+|---|---|
+| Luck cap | The most Luck the gear suggestions may ask of them. Default: their Luck + 40 |
+| Luck items owned | How many type-A (Thief Ring, Ebisu Raiment) and type-B (Soul Eater Ring) items they have. Default: whatever their character can equip |
+| Luck (friends) | Overrides the Luck read from the game |
+| Owns every luck item, Luck with no luck gear (friends) | Suggest whole outfits instead of Luck ranges (see below) |
+
+Only the page itself can change settings; requests from other websites are refused. The page is
+`web/index.html`, `web/style.css` and `web/app.js`.
+
+### Co-op
 
 Each player rolls their own chest. The seed is the stage's shared seed plus that player's
-connection byte. `friends.txt` has one line per friend:
+connection byte. Online, the watcher finds everyone on its own: each player's gamertag, seat
+(connection byte), character and Luck, so there's nothing to set up.
 
-```
-auto 0x21              # character auto-detected; Luck and accessories read from the game
-Charlotte 0x21 luck=4  # or set any of them by hand
-```
-
-The first friend is usually `0x21`, the next `0x22`, and so on. If a friend's real drop doesn't
-match, record it and the tool narrows down the right byte:
+If the game's member list can't be read, name friends by hand with `--friend Character:0x21`
+(repeatable). If a friend's real drop doesn't match the prediction, record it and the tool narrows
+down the right byte:
 
 ```
 python3 friend_byte.py add Richter "Megingiord"
@@ -58,45 +92,53 @@ python3 friend_byte.py add Richter "Megingiord"
 
 Boss chests are saved to `chests.jsonl` automatically for this.
 
-### Rerolling for a target (`want.txt`)
+### Rerolling for a target
 
 The stage seed is the game's uptime in milliseconds at the moment the stage loads. A one-millisecond
 difference gives a completely different drop, so you can't time the "Start the Game" press. What you
 *can* do is reload and let the watcher tell you which loads are worth opening.
 
-Name the items you want with `--want` (repeatable) or in `want.txt`, one per line. Names match as
-case-insensitive substrings, so `valmanway` also matches `Valmanway +1`.
+Pick each player's desired drop on the page, or name targets with `--want` (repeatable) or
+`/chest want`. Names match as case-insensitive substrings, ignoring spaces and apostrophes, so
+`valmanway` also matches `Valmanway +1` and `Dracula's Soul` matches `Dracula Soul`.
 
-```
-python3 chest_watch.py --want "Miser Ring" --want valmanway
-```
+A typed target with no prefix counts for anyone. To aim one at a single player, put who it's for
+in front:
 
-The top line of each frame then says what to do:
-
-| Top line | Meaning |
+| Prefix | Who |
 |---|---|
-| `*** TARGET HIT` | Your drop is a target. Open the chest. The terminal bell rings once per load. |
-| `+++ TARGET REACHABLE` | Not as you are, but this load's seed gives a target at another Luck or luck-item count. Change to one of the listed setups **before** touching the chest and wait for `TARGET HIT`. |
-| `??? TARGET POSSIBLE` | A friend might get a target, depending on their Luck. |
-| `--- no target` | Nothing you can wear helps this load. Reload. |
-
-Each line also counts the stage loads seen so far.
-
-A `REACHABLE` setup reads like `Valmanway: LCK 21-33 with acc 0/0`: a Luck range plus how many
-type-A / type-B luck items to wear. Type A is Thief Ring or Ebisu Raiment, and type B is Soul Eater
-Ring. Setups closest to your current gear come first. Only setups you can actually build are shown:
-
-- **Luck cap:** at most your current LCK + 40. Set your real maximum with `--max-luck N` or a
-  `maxluck=N` line in `want.txt`.
-- **Luck items:** at most 2 of each type, and only types your character can equip (Alucard can't
-  wear Soul Eater Ring). Say how many you own with `--max-acc A/B` or a `maxacc=A/B` line.
+| `you:` or your character's name | You |
+| a character name, like `Richter:` | The friend playing that character |
+| a gamertag, like `SomeFriend:` | That player (the Player column) |
+| `all:` or none | Anyone |
 
 ```
-# want.txt
-Valmanway
-maxluck=33
-maxacc=1/0
+python3 chest_watch.py --want "you: Miser Ring" --want "Richter: Megingiord" --max-luck 33 --max-acc 1/0
 ```
+
+**Can manipulate** then says what to do:
+
+| Can manipulate | Meaning |
+|---|---|
+| `YES: open it now` | Their drop is a target. Open the chest. |
+| `yes: Valmanway: LCK 21-33 with acc 0/0` | Not as they are, but this load gives a target with other gear. Change to that setup **before** touching the chest, and wait for `YES`. |
+| `maybe (Luck unknown)` | They might get a target, but their Luck isn't known. |
+| `no` | Nothing they can wear helps this load. Reload. |
+| `-` | No desired drop. |
+
+The terminal view says the same in its top line (`*** TARGET HIT`, `+++ TARGET REACHABLE`,
+`??? TARGET POSSIBLE`, `--- no target`), with a count of stage loads seen, and rings the terminal
+bell once per hit.
+
+A `yes:` setup is a Luck range plus how many type-A / type-B luck items to wear. Setups closest to
+the player's current gear come first, and only ones they can build are shown: Luck up to their
+Luck cap, and no more luck items than they own or their character can equip (Alucard can't wear
+Soul Eater Ring).
+
+If a friend owns every luck item, tick **Owns every luck item** and enter their Luck with no luck
+gear on. The watcher then tries every outfit of luck gear their character can equip and names the
+smallest one that works, such as `Retro Helm: wear Ebisu Raiment, Thief Ring, nothing else with
+Luck (LCK 19, acc 2/0)`. Weapon Luck isn't counted.
 
 How much this helps depends on the chest and your gear. For one boss chest, with LCK 33 and a
 single Thief Ring, a Valmanway came up on about 1.1% of loads as-is and on about 3.5% of loads
@@ -124,13 +166,26 @@ claude --plugin-dir /path/to/hod-chest/sidebar-mod
 
 | Command | What it does |
 |---|---|
-| `/chest` | Opens the pane and starts the watcher (restarts it if it stopped) |
-| `/chest want Miser Ring, Valmanway` | Sets the targets in `want.txt`; `/chest want` alone clears them |
-| `/chest maxluck 33` | Caps the Luck the suggestions may ask for; `/chest maxluck` resets it |
+| `/chest` | Opens the pane and starts the watcher, with the web table on http://localhost:8765/ (restarts it if it stopped) |
+| `/chest want Miser Ring, SomeFriend: Megingiord` | Replaces the desired drops (prefixes as above); `wants`, `wanted`, `desire` and `desired` work too. `/chest want` alone clears them (None) |
+| `/chest maxluck 33` | Caps the Luck the suggestions may ask of you; `/chest maxluck` resets it |
 | `/chest maxacc 1/0` | How many type-A / type-B luck items you own; `/chest maxacc` resets it |
 
-`TARGET HIT` and `TARGET REACHABLE` show in green and cyan, and each new one pops a toast and a
-desktop notification. If the mod reloads, it restarts the watcher on its own.
+The pane shows:
+
+- **Live** or **Not live**, with the reason: the watcher isn't running, the game isn't running, or
+  the game is still starting
+- when the prediction last changed, and when the watcher last checked
+- a table with one row per player: **Player** (gamertag), **Character**, **Luck**, **Desired drop**
+  (`None` without a target), **Can manipulate** (`YES: open it now`, `yes:` plus the gear setup, `maybe`, or
+  `no`) and **Expected drop**
+- each player's drop list with the odds at their current Luck
+
+Settings changed in the pane's commands and on the web page are the same settings, so the two
+always agree. Each new `TARGET HIT` or `TARGET REACHABLE` pops a toast and a desktop notification.
+If the mod reloads, it restarts the watcher on its own; the settings reset with it. The pane runs
+`chest_watch.py --json --serve 8765`; `--json` prints one JSON record per refresh, if you want to
+build your own view.
 
 ## How the roll works
 
@@ -149,7 +204,8 @@ desktop notification. If the mod reloads, it restarts the watcher on its own.
 
 - Luck is read using Alucard's stat layout. Other characters may read wrong until the game locks
   it in when you touch the chest.
-- The Jonathan and Julius character ids (3 and 4) haven't been confirmed in game yet.
+- The Jonathan and Julius character ids (3 and 4) haven't been confirmed in game yet. Simon (10) and
+  Getsu Fuma (11) were identified from their item lists; Getsu Fuma's was confirmed in game.
 - Spell Glyph names come from a community list rather than the game files.
 - `REACHABLE` doesn't know your inventory beyond what `maxluck`/`maxacc` tell it, and it can't
   tell how much Luck a luck item adds itself. Check the `LCK` the pane shows before you touch the

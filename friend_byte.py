@@ -55,7 +55,7 @@ def main():
         print(f'{ch}: {len(bytes_)} of 256 bytes fit {n} drop(s); low-slot candidates: '
               f'{", ".join(f"{b:#04x}" for b in likely) or "none"}')
         if len(bytes_) == 1:
-            print(f'  -> put "{ch} {next(iter(bytes_)):#04x}" in friends.txt')
+            print(f"  -> run chest_watch.py --friend '{ch}:{next(iter(bytes_)):#04x}' if the game can't read the session")
 
 
 if __name__ == '__main__':

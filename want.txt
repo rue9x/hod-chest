@@ -1,3 +1,0 @@
-Miser Ring
-maxluck=33
-maxacc=1/0

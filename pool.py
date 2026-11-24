@@ -11,7 +11,7 @@ MASK.update({8: (0x8291D988, 0x3A, 0x2A), 9: (0x8291D980, 0x3E, 0x2A),   # 9 = g
              10: (0x8291D99C, 0x3E, 0x2A), 11: (0x8291D978, 0x3E, 0x2A)})
 # Character ids, from each character's exclusive weapons in the WEPN masks
 CHARS = {1: 'Soma', 2: 'Alucard', 3: 'Jonathan', 4: 'Julius', 5: 'Richter', 6: 'Shanoa',
-         7: 'Charlotte', 8: 'Yoko', 9: 'Maria'}
+         7: 'Charlotte', 8: 'Yoko', 9: 'Maria', 10: 'Simon', 11: 'Getsu Fuma'}
 
 
 def db_files(m, g):

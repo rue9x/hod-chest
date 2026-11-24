@@ -299,36 +299,97 @@ def scan_chests(m, lo, hi):
 SESSION = 0x829034E0 + 0x20     # online session object; members at +0x17C (slots 0x5F..)
 LOCAL_MEMBER_VT = 0x82068DA8
 SEED_BASE = 0x84                 # *(HANDLE_TABLE obj)+0x84: per-stage seed base, shared across players
-FRIENDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'friends.txt')
-WANT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'want.txt')
+
+# Every setting lives in memory only and resets when the watcher restarts. The web page (and the
+# sidebar's /chest command, through the same page server) changes it with POST /set.
+#   wants:   [(who or None, item name)]; who is a lowercase player label, None means anyone
+#   players: {player key, lowercase ('you' or a gamertag): {maxluck, maxacc, owns, base, luck}}
+SETTINGS = {'wants': [], 'players': {}}
+PLAYER_FIELDS = ('maxluck', 'maxacc', 'owns', 'base', 'luck')
 
 
 def want_list(args):
-    """(target names lowercase, Luck cap or None, (max type-A, max type-B) luck items you own or None).
-    --want/--max-luck/--max-acc, else want.txt: one item name per line, plus optional
-    'maxluck=N' and 'maxacc=A/B' lines."""
-    raw, cap, acc = list(args.want or []), args.max_luck, args.max_acc
+    """(targets [(who or None, name)], your Luck cap or None, your (type-A, type-B) luck items or None)."""
+    mine = SETTINGS['players'].get('you', {})
     try:
-        with open(WANT_FILE, encoding='utf-8-sig') as fh:
-            lines = [ln.strip() for ln in fh if ln.strip() and not ln.startswith('#')]
-    except OSError:
-        lines = []
-    for ln in lines:
-        if ln.lower().startswith('maxacc='):
-            if acc is None:
-                try:
-                    acc = parse_acc(ln.split('=', 1)[1])
-                except ValueError:
-                    pass
-        elif ln.lower().startswith('maxluck='):
-            if cap is None:
-                try:
-                    cap = int(ln.split('=', 1)[1])
-                except ValueError:
-                    pass
-        elif not args.want:
-            raw.append(ln)
-    return [w.lower() for w in raw], cap, acc
+        cap = int(mine['maxluck']) if 'maxluck' in mine else None
+        acc = parse_acc(mine['maxacc']) if 'maxacc' in mine else None
+    except ValueError:
+        cap = acc = None
+    return list(SETTINGS['wants']), cap, acc
+
+
+ANYONE = ('all', 'anyone', 'everyone', 'any')
+
+
+def set_player_want(key, labels, item, everyone):
+    """Make `item` (or nothing, if empty) the one target of the player known by `labels`. Targets for
+    anyone are kept for everyone else, as one copy per other player in `everyone` [(key, labels)]."""
+    labels = {l.lower() for l in labels} | {key.lower()}
+    keep, shared = [], []
+    for who, name in SETTINGS['wants']:
+        if who is None:
+            shared.append(name)
+        elif who not in labels:
+            keep.append((who, name))
+    for k, ls in everyone:
+        if not ({l.lower() for l in ls} | {k.lower()}) & labels:
+            keep += [(k.lower(), name) for name in shared]
+    if item:
+        keep.append((key.lower(), item))
+    SETTINGS['wants'] = keep
+
+
+def apply_setting(req, rows):
+    """One change from POST /set: {field, value, key?}. Returns what it did, or raises ValueError."""
+    field, value = str(req.get('field', '')), str(req.get('value') or '').strip()
+    if field == 'wants':        # the whole list: 'Item, Gamertag: Item'
+        SETTINGS['wants'] = [split_who(w) for w in value.split(',') if w.strip()]
+        return f'Desired drop: {fmt_wants(SETTINGS["wants"])}' if SETTINGS['wants'] else 'Desired drop cleared (None).'
+    key = str(req.get('key') or 'you')
+    if field == 'want':         # one player's only target
+        row = next((r for r in rows if r.get('key', '').lower() == key.lower()), None)
+        if row is None and key.lower() == 'you':
+            row = {'key': 'you', 'labels': ['you', 'me'], 'player': 'You'}
+        if row is None:
+            raise ValueError(f'no player {key!r} in this stage')
+        set_player_want(row['key'], row.get('labels', []), value, [(r['key'], r.get('labels', [])) for r in rows])
+        return f'{row["player"]}: desired drop {value or "None"}'
+    if field not in PLAYER_FIELDS:
+        raise ValueError(f'unknown setting {field!r}')
+    if value:
+        if field == 'maxacc':
+            a, b = parse_acc(value)
+            value = f'{a}/{b}'
+        elif field == 'owns':
+            value = 'all'
+        elif not value.isdigit() or int(value) > 999:
+            raise ValueError(f'{field} must be a whole number from 0 to 999')
+    opts = dict(SETTINGS['players'].get(key.lower(), {}))
+    if value:
+        opts[field] = value
+    else:
+        opts.pop(field, None)
+    SETTINGS['players'] = {**SETTINGS['players'], key.lower(): opts}
+    return f'{key}: {field} {value or "reset"}'
+
+
+def split_who(text):
+    """'Richter: Megingiord' -> ('richter', 'Megingiord'); 'Megingiord' -> (None, 'Megingiord')."""
+    who, sep, name = text.partition(':')
+    who = who.strip().lower()
+    if sep and name.strip() and who:
+        return (None if who in ANYONE else who), name.strip()
+    return None, text.strip()
+
+
+def wants_for(wants, labels):
+    """Target names that apply to a player known by any of `labels`."""
+    return [nm for who, nm in wants if who is None or who in labels]
+
+
+def fmt_wants(wants):
+    return ', '.join(f'{who}: {nm}' if who else nm for who, nm in wants)
 
 
 def parse_acc(text):
@@ -336,9 +397,80 @@ def parse_acc(text):
     return max(0, min(2, int(a))), max(0, min(2, int(b or 0)))
 
 
+def squash(text):
+    """Lowercase with spaces and apostrophes dropped: 'Valmanway+1' matches 'Valmanway +1',
+    "Dracula's Soul" matches 'Dracula Soul'."""
+    return ''.join(text.lower().replace('\u2019', "'").replace("'s", '').replace("'", '').split())
+
+
 def wanted(item, wants, names):
-    nm = (names.get(item) or '').lower()
-    return bool(nm) and any(w in nm for w in wants)
+    nm = squash(names.get(item) or '')
+    return bool(nm) and any(squash(w) in nm for w in wants)
+
+
+MEMBER_SLOTS, MEMBER_NAME = 0x40, 0x158   # session +0x100: members in slot order; UTF-16 gamertag at +0x158
+
+
+def session_members(m):
+    """{connection byte: gamertag} for everyone in the online session, {} offline."""
+    out = {}
+    try:
+        s = m.u32(SESSION)
+        if not s:
+            return out
+        for i in range(8):
+            mem = m.u32(s + (MEMBER_SLOTS + i) * 4)
+            if not mem or m.u32(mem) != LOCAL_MEMBER_VT:
+                continue
+            raw, tag = m.read(mem + MEMBER_NAME, 32), ''
+            for k in range(0, 32, 2):
+                ch = int.from_bytes(raw[k:k + 2], 'big')
+                if not ch:
+                    break
+                tag += chr(ch)
+            if tag.isprintable() and tag:
+                out[m.u8(mem + 0x18A)] = tag
+    except ValueError:
+        pass
+    return out
+
+
+def seats(m):
+    """(local byte or None, [(byte, gamertag, player object or None)] for everyone else), matching the
+    session's members to the stage's player objects by seat order (byte & 0x1F is the seat)."""
+    members = session_members(m)
+    try:
+        plist = sorted(players(m))
+    except ValueError:
+        plist = []
+    order = sorted(members, key=lambda b: b & 0x1F)
+    local, objs = None, {}
+    if len(plist) == len(order):
+        for b, (_, obj, loc) in zip(order, plist):
+            if loc:
+                local = b
+            else:
+                objs[b] = obj
+    else:   # someone still loading: fall back to seat number = player slot
+        for i, obj, loc in plist:
+            b = next((b for b in order if b & 0x1F == i), None)
+            if b is None:
+                continue
+            if loc:
+                local = b
+            else:
+                objs[b] = obj
+    return local, [(b, members[b], objs.get(b)) for b in order if b != local]
+
+
+def friend_overrides():
+    """{gamertag, lowercase: options} set on the page for friends."""
+    return {k: v for k, v in SETTINGS['players'].items() if k != 'you'}
+
+
+def friend_bytes(args):
+    """The connection byte each --friend entry resolves to, in order."""
+    return [b if b is not None else 0x21 + n for n, (_, b, *_rest) in enumerate(friend_list(args))]
 
 
 def session_bytes(m):
@@ -368,23 +500,18 @@ def chest_state_from_seed(seed):
 
 
 def friend_list(args):
-    """[(character, seed byte)] from --friend 'Charlotte:0x21' or friends.txt lines 'Charlotte 0x21'.
-    The byte is the friend's own connection id: (reuse counter << 5) | slot. Default guess 0x21."""
+    """[(character, seed byte, ...)] from --friend 'Charlotte:0x21', for when the game's member list
+    can't be read. The byte is the friend's connection id: (reuse counter << 5) | slot."""
     raw = args.friend or []
-    if not raw:
-        try:
-            with open(FRIENDS_FILE, encoding='utf-8-sig') as fh:
-                raw = [ln.strip() for ln in fh if ln.strip() and not ln.startswith('#')]
-        except OSError:
-            pass
     out = []
     for item in raw:
         parts = item.replace(':', ' ').split()
         opts = dict(p.split('=', 1) for p in parts[1:] if '=' in p)
         nums = [p for p in parts[1:] if '=' not in p]
-        out.append((parts[0], int(nums[0], 0) if nums else 0x21,
+        out.append((parts[0], int(nums[0], 0) if nums else None,
                     int(opts['luck']) if 'luck' in opts else None,
-                    int(opts['acc']) if 'acc' in opts else None))
+                    int(opts['acc']) if 'acc' in opts else None,
+                    {k: opts[k] for k in ('maxluck', 'maxacc', 'owns', 'base') if k in opts}))
     return out
 
 
@@ -426,15 +553,140 @@ def predict_other(m, snap, cid, byte, luck_steps=5, lucks=None, accs=(0, 1, 2)):
     return res
 
 
+ARMOR_SLOT, ARMOR_LUCK = 0xC, 0x36     # GURD record: 1 helm, 2 body, 3 cloak, 4 boots, 5 accessory; LCK bonus
+SLOT_NAMES = {1: 'head', 2: 'body', 3: 'cloak', 4: 'feet', 5: 'accessory'}
+_outfit_cache = {}
+
+
+def outfits(m, cid, names):
+    """{(gear LCK, type-A, type-B): fewest luck items giving it} over every outfit of luck gear `cid`
+    can equip, one of each item, two accessory slots. Slots left out hold anything without luck."""
+    if cid in _outfit_cache:
+        return _outfit_cache[cid]
+    import itertools, pool
+    by_slot = {k: [] for k in SLOT_NAMES}
+    for i in range(BASE[5] - BASE[4]):
+        try:
+            rec = armor_record(m, i)
+            if not rec:
+                continue
+            lck, eff, slot = m.s16(rec + ARMOR_LUCK), m.u16(rec + 0xE), m.u16(rec + ARMOR_SLOT)
+            if slot in by_slot and (lck > 0 or eff in (0xE, 0xA)) and pool.allowed(m, BASE[4] + i, cid):
+                by_slot[slot].append((names.get(BASE[4] + i, hex(BASE[4] + i)), lck, eff == 0xE, eff == 0xA))
+        except ValueError:
+            continue
+    none = [None]
+    pick = lambda slot: none + by_slot[slot]
+    accs = [()] + [(x,) for x in by_slot[5]] + list(itertools.combinations(by_slot[5], 2))
+    best = {}
+    for gear in itertools.product(pick(1), pick(2), pick(3), pick(4), accs):
+        items = [g for g in gear[:4] if g] + list(gear[4])
+        key = (sum(g[1] for g in items), min(2, sum(g[2] for g in items)), min(2, sum(g[3] for g in items)))
+        if key not in best or len(items) < len(best[key]):
+            best[key] = [g[0] for g in items]
+    _outfit_cache[cid] = best
+    return best
+
+
+def outfit_reach(m, st, fc, cid, cname, base, luck, wants, names):
+    """Hit tuples for a player who owns every luck item: the smallest outfit that drops a target."""
+    found = []
+    for (gl, a, b), items in outfits(m, cid, names).items():
+        total = max(0, min(300, base + gl))
+        item = predict(fc, st, total, a, b)[0]
+        if wanted(item, wants, names):
+            found.append((len(items), abs(total - luck), item, total, a, b, items))
+    if not found:
+        return []
+    found.sort(key=lambda f: f[:2])
+    _, _, item, total, a, b, items = found[0]
+    wear = ', '.join(items) if items else 'no luck gear at all'
+    return [(cname, item, f'reach:{names.get(item, hex(item))}: wear {wear}, nothing else with Luck '
+                          f'(LCK {total}, acc {a}/{b})')]
+
+
+def drop_odds(c, weighted, names):
+    """[[item name, % chance]] for one player's chest: weighted items, then the pool share."""
+    tw = sum(w for _, w in weighted)
+    out = [[names.get(it, hex(it)), round(100 * w / max(tw, 10000), 1)] for it, w in weighted if it]
+    pool_items = [e[0] for e in c['entries'][c['count']:] if e[0]]
+    if pool_items:
+        each = 100 * max(0, 10000 - tw) / 10000 / len(pool_items)
+        out += [[names.get(i, hex(i)), round(each, 1)] for i in pool_items]
+    return sorted(out, key=lambda r: -r[1])
+
+
+def manip_cell(new, wants):
+    """The table's "can manipulate" cell from the hit tuples one player added."""
+    if not wants:
+        return ''
+    flags = [h[2] for h in new]
+    if any(f is True for f in flags):
+        return 'YES: open it now'
+    reach = [f[6:] for f in flags if isinstance(f, str) and f.startswith('reach:')]
+    if reach:
+        return 'yes: ' + reach[0].split('; ')[0]
+    if any(f is False for f in flags):
+        return 'maybe (Luck unknown)'
+    far = [f[4:] for f in flags if isinstance(f, str) and f.startswith('far:')]
+    return 'no: ' + far[0] if far else 'no'
+
+
+def friend_reach(m, snap, cid, byte, cname, luck, acc, limits, wants, names):
+    """Gear suggestions for a friend whose Luck is known, as hit tuples like the local player's."""
+    import pool
+    st = chest_state_from_seed((snap['base'] + snap['key'] + 1 + byte) & 0xFFFFFFFF)
+    count, entries = pool.build(m, [tuple(t) for t in snap['table']], snap['pools'], cid)
+    fc = {'count': count, 'entries': list(entries)}
+    if limits.get('owns') == 'all' and 'base' in limits:
+        try:
+            return outfit_reach(m, st, fc, cid, cname, int(limits['base']), luck, wants, names)
+        except ValueError:
+            pass
+    max_a, max_b = luck_accessories(m, cid)
+    try:
+        if 'maxacc' in limits:
+            la, lb = parse_acc(limits['maxacc'])
+            max_a, max_b = min(max_a, la), min(max_b, lb)
+        cap = int(limits['maxluck']) if 'maxluck' in limits else luck + 40
+    except ValueError:
+        cap = luck + 40
+    every = luck_recipes(fc, st, wants, names, max_a, max_b)
+    recipes = [(it, a, b, lo, min(hi, cap)) for it, a, b, lo, hi in every if lo <= cap]
+    if recipes:
+        return [(cname, recipes[0][0], 'reach:' + fmt_recipes(recipes, names, luck, acc, 0))]
+    if every:
+        return [(cname, every[0][0], f'far:{cname} only at LCK {min(r[3] for r in every)}+, above their cap of {cap}')]
+    return []
+
+
 def friend_lines(m, h, c, args, names, hits=None):
     """Predict each friend's drop: seed = shared stage base + key + 1 + their connection byte."""
     import pool
     friends = friend_list(args)
-    local, remote = session_bytes(m)
-    if local is None:
-        return []
-    if not friends:   # nobody configured: one default entry per remote member, character auto-detected
-        friends = [('auto', 0x21 + k, None, None) for k in range(max(1, len(remote)))]
+    members = session_members(m)
+    _, seated = seats(m)
+    seat_obj = {b: obj for b, _, obj in seated}
+    if seated:   # online: everyone in the session, in seat order; the page's settings add details
+        given = {f[1]: f for f in friends if f[1] is not None}
+        over = friend_overrides()
+        friends = []
+        for b, gt, _ in seated:
+            name, _, luck, acc, limits = given.get(b, ('auto', b, None, None, {}))
+            o = over.get(gt.lower(), {})
+            try:
+                luck = int(o['luck']) if 'luck' in o else luck
+                acc = int(o['acc']) if 'acc' in o else acc
+            except ValueError:
+                pass
+            friends.append((o.get('char', name), b, luck, acc,
+                            {**limits, **{k: o[k] for k in ('maxluck', 'maxacc', 'owns', 'base') if k in o}}))
+    else:
+        local, remote = session_bytes(m)
+        if local is None:
+            return []
+        if not friends:   # nobody configured: one default entry per remote member, character auto-detected
+            friends = [('auto', None, None, None, {}) for _ in range(max(1, len(remote)))]
     snap = chest_snapshot(m, h, c)
     by_name = {v.lower(): k for k, v in pool.CHARS.items()}
     try:
@@ -442,9 +694,11 @@ def friend_lines(m, h, c, args, names, hits=None):
     except ValueError:
         others = []
     out = []
-    for n, (cname, byte, luck, acc) in enumerate(friends):
+    for n, (cname, byte, luck, acc, limits) in enumerate(friends):
+        if byte is None:   # no byte on the line: guess (host is 0x20, guests 0x21, 0x22.. in join order)
+            byte = 0x21 + n
         cid = by_name.get(cname.lower())
-        obj = others[n] if n < len(others) else None
+        obj = seat_obj.get(byte) if seated else (others[n] if n < len(others) else None)
         read_luck = read_acc = None
         if obj:
             try:
@@ -461,7 +715,14 @@ def friend_lines(m, h, c, args, names, hits=None):
             luck = read_luck
         if acc is None and read_acc is not None:
             acc = read_acc
+        rows = getattr(args, 'rows', None) if hits is not None else None
         if not cid:
+            if rows is not None:
+                rows.append({'key': members.get(byte) or f'friend{n + 1}',
+                             'labels': [(members.get(byte) or f'friend{n + 1}').lower()],
+                             'settings': SETTINGS['players'].get((members.get(byte) or f'friend{n + 1}').lower(), {}),
+                             'player': members.get(byte) or f'friend {n + 1}', 'char': '?', 'luck': '?',
+                             'want': 'None', 'manip': '-', 'drop': 'character not detected yet', 'odds': []})
             out.append(f'  friend #{n + 1}: character not detected yet' if cname == 'auto' else
                        f'  friend {cname}: unknown character (use one of {", ".join(pool.CHARS.values())})')
             continue
@@ -469,15 +730,35 @@ def friend_lines(m, h, c, args, names, hits=None):
                             lucks=[max(0, min(300, luck))] if luck is not None else None,
                             accs=(acc,) if acc is not None else (0, 1, 2))
         tag = f'byte {byte:#04x}' + (f', LCK {luck}' if luck is not None else '') + (f', acc {acc}' if acc is not None else '')
-        if hits is not None:
+        gt = members.get(byte)
+        label = f'{cname} ({gt})' if gt else cname
+        flabels = {cname.lower(), cname.lower().split()[-1], f'friend{n + 1}'} | ({gt.lower()} if gt else set())
+        mine = wants_for(args.wants, flabels) if hits is not None else []
+        h0 = len(hits) if hits is not None else 0
+        if mine:
             for it in res:
-                if wanted(it, args.wants, names):
-                    hits.append((cname, it, len(res) == 1))
+                if wanted(it, mine, names):
+                    hits.append((label, it, len(res) == 1))
+            if len(res) == 1 and not wanted(next(iter(res)), mine, names) and luck is not None:
+                hits += friend_reach(m, snap, cid, byte, label, luck, acc or 0, limits, mine, names)
+        if rows is not None:
+            drop = (names.get(next(iter(res)), '?') if len(res) == 1 else
+                    'by Luck: ' + ', '.join(f'{names.get(it, hex(it))} ({min(v)}-{max(v)})' for it, v in res.items()))
+            count, entries = pool.build(m, [tuple(t) for t in snap['table']], snap['pools'], cid)
+            fc = {'count': count, 'entries': list(entries)}
+            st = chest_state_from_seed((snap['base'] + snap['key'] + 1 + byte) & 0xFFFFFFFF)
+            weighted = predict(fc, st, max(0, min(300, luck or 0)), acc or 0, 0)[4]
+            rows.append({'key': gt or f'friend{n + 1}', 'labels': sorted(flabels),
+                         'settings': SETTINGS['players'].get((gt or f'friend{n + 1}').lower(), {}),
+                         'player': gt or f'friend {n + 1}', 'char': cname,
+                         'luck': str(luck) if luck is not None else '?', 'want': ', '.join(mine) or 'None',
+                         'manip': manip_cell(hits[h0:], mine) or '-', 'drop': drop,
+                         'odds': drop_odds(fc, weighted, names)})
         if len(res) == 1:
-            out.append(f'  friend {cname} [{tag}]: WILL DROP {fmt_item(next(iter(res)), names)}')
+            out.append(f'  friend {label} [{tag}]: WILL DROP {fmt_item(next(iter(res)), names)}')
         else:
             parts = ', '.join(f'{names.get(it, hex(it))} (LCK {min(v)}-{max(v)})' for it, v in res.items())
-            out.append(f'  friend {cname} [{tag}]: depends on their Luck/accessories: {parts}')
+            out.append(f'  friend {label} [{tag}]: depends on their Luck/accessories: {parts}')
     return out
 
 
@@ -505,9 +786,31 @@ def report(m, chests, args, names, hits=None):
             acc_a, acc_b = (args.acc_a, args.acc_b) if args.acc_a is not None else estimate_accessories(m)
             src = 'override' if args.luck is not None else 'estimated from player'
         item, how, r, tot, weighted = predict(c, rng, luck, acc_a, acc_b)
-        if hits is not None and c['type'] == 4 and wanted(item, args.wants, names):
+        mine, labels, who, me_char, me_gt = [], {'you', 'me'}, '', '', ''
+        h0 = len(hits) if hits is not None else 0
+        if c['type'] == 4:
+            try:
+                me = local_player(m)
+                cid = character_id(m, me) if me else None
+                if cid:
+                    import pool
+                    labels |= {pool.CHARS.get(cid, '').lower(), pool.CHARS.get(cid, ' ').lower().split()[-1]}
+                    who = me_char = pool.CHARS.get(cid, '')
+            except ValueError:
+                pass
+            mine_b = seats(m)[0]
+            members = session_members(m)
+            left = ([members[mine_b]] if mine_b in members else
+                    [t for b, t in members.items() if b not in friend_bytes(args)])
+            if len(left) == 1:
+                labels.add(left[0].lower())
+                me_gt = left[0]
+                who = f'{who} ({left[0]})' if who else left[0]
+        if hits is not None and c['type'] == 4 and args.wants:
+            mine = wants_for(args.wants, labels)
+        if mine and wanted(item, mine, names):
             hits.append(('you', item, True))
-        elif hits is not None and c['type'] == 4 and args.wants and not c['snap']:
+        elif mine and not c['snap']:
             cap = args.luck_cap if args.luck_cap is not None else luck + 40
             try:
                 me = local_player(m)
@@ -516,15 +819,24 @@ def report(m, chests, args, names, hits=None):
                 max_a, max_b = 2, 2
             if args.acc_cap:
                 max_a, max_b = min(max_a, args.acc_cap[0]), min(max_b, args.acc_cap[1])
-            every = luck_recipes(c, rng, args.wants, names, max_a, max_b)
+            every = luck_recipes(c, rng, mine, names, max_a, max_b)
             recipes = [(it, a, b, lo, min(hi, cap)) for it, a, b, lo, hi in every if lo <= cap]
             if recipes:
                 hits.append(('you', recipes[0][0], 'reach:' + fmt_recipes(recipes, names, luck, acc_a, acc_b)))
             elif every:
                 hits.append(('you', every[0][0], f'far:only at LCK {min(r[3] for r in every)}+, above your cap of {cap}'))
+        rows = getattr(args, 'rows', None)
+        if rows is not None and c['type'] == 4:
+            rows.append({'key': 'you', 'labels': sorted(labels),
+                         'settings': SETTINGS['players'].get('you', {}),
+                         'player': me_gt or 'You', 'char': me_char or '?',
+                         'luck': f'{luck}' + (' (locked)' if c['snap'] else ''), 'want': ', '.join(mine) or 'None',
+                         'manip': manip_cell(hits[h0:] if hits is not None else [], mine) or '-',
+                         'drop': (names.get(item, hex(item)) if item else '?') if c['count'] else 'chest still loading',
+                         'odds': drop_odds(c, weighted, names) if c['count'] else []})
         lines.append(f'{CHEST_TYPES.get(c["type"], c["type"])} chest @ {h:08X}  state {c["state"]}  '
                      f'rng[{c["key"]}]={rng:08X}  LCK {luck} acc {acc_a}/{acc_b} ({src})')
-        lines.append(f'  >>> WILL DROP: {fmt_item(item, names)}  via {how}  (roll {r}/{tot})')
+        lines.append(f'  >>> {"you, " + who + ", " if who else ""}WILL DROP: {fmt_item(item, names)}  via {how}  (roll {r}/{tot})')
         tw = sum(w for _, w in weighted)
         for it, w in weighted:
             if it:
@@ -543,6 +855,76 @@ def report(m, chests, args, names, hits=None):
         except ValueError:
             pass
     return lines
+
+
+WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
+WEB_FILES = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
+             '/app.js': ('app.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
+LATEST = {'state': 'waiting', 'note': 'starting', 'rows': []}   # newest record, for the web page
+import threading
+SETTINGS_LOCK = threading.Lock()
+
+
+def serve(port):
+    """Serve web/ and /state.json (the newest record) on localhost in a background thread."""
+    import http.server, threading
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = self.path.split('?')[0]
+            if path == '/state.json':
+                body, ctype = json.dumps({**LATEST, 'now': time.time()}).encode(), 'application/json'
+            elif path in WEB_FILES:
+                name, ctype = WEB_FILES[path]
+                try:
+                    with open(os.path.join(WEB_DIR, name), 'rb') as fh:
+                        body = fh.read()
+                except OSError:
+                    return self.send_error(404)
+            else:
+                return self.send_error(404)
+            self.send_response(200)
+            self.send_header('Content-Type', ctype + '; charset=utf-8')
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_POST(self):
+            # Only this page and the sidebar may write: a JSON body (other sites can't send one
+            # without a CORS preflight, which this server never answers) from a localhost origin.
+            origin = self.headers.get('Origin', '')
+            if (self.path != '/set' or 'application/json' not in self.headers.get('Content-Type', '')
+                    or not origin.startswith(('http://localhost:', 'http://127.0.0.1:'))):
+                return self.send_error(403)
+            try:
+                req = json.loads(self.rfile.read(min(int(self.headers.get('Content-Length', 0)), 4096)))
+                with SETTINGS_LOCK:
+                    said = apply_setting(req, LATEST.get('rows', []))
+            except (ValueError, TypeError, AttributeError) as e:
+                body = json.dumps({'ok': False, 'said': str(e)}).encode()
+                self.send_response(400)
+            except Exception as e:      # a bug: still answer, so the page and sidebar can say why
+                body = json.dumps({'ok': False, 'said': f'watcher error: {e!r}'}).encode()
+                self.send_response(500)
+            else:
+                body = json.dumps({'ok': True, 'said': said}).encode()
+                self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    try:
+        srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    except OSError as e:
+        import sys
+        print(f'web page not started: port {port}: {e}', file=sys.stderr, flush=True)
+        return
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
 def enable_console():
@@ -566,35 +948,95 @@ def enable_console():
 def main():
     enable_console()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--serve', type=int, metavar='PORT',
+                    help='also serve a live HTML table at http://localhost:PORT')
+    ap.add_argument('--json', action='store_true',
+                    help='one JSON record per refresh (state, and a row per player) for the sidebar pane')
     ap.add_argument('--all', action='store_true', help='show every unopened chest, not just the boss chest')
     ap.add_argument('--luck', type=float, help='override LCK used before the game locks it in')
     ap.add_argument('--acc-a', type=int, help='override count of luck accessory A (0-2); default: read from equipment')
     ap.add_argument('--acc-b', type=int, default=0, help='override count of luck accessory B (with --acc-a)')
-    ap.add_argument('--friend', action='append', help="friend as CHAR or CHAR:BYTE, repeatable; default: friends.txt")
+    ap.add_argument('--friend', action='append', help="friend as CHAR or CHAR:BYTE, repeatable, for when the session's members can't be read")
     ap.add_argument('--once', action='store_true')
     ap.add_argument('--interval', type=float, default=0.5)
     ap.add_argument('--rescan', type=float, default=5.0, help='seconds between object rescans')
     ap.add_argument('--lo', type=lambda s: int(s, 16), default=0x40000000, help='scan start (hex)')
     ap.add_argument('--hi', type=lambda s: int(s, 16), default=0x50000000, help='scan end (hex)')
     ap.add_argument('--want', action='append',
-                    help='target item name (substring, any case), repeatable; default: want.txt')
+                    help="target item name (substring, any case), repeatable; 'Richter: Megingiord' targets "
+                         "one player ('you', a character name or a gamertag); the web page can change it")
     ap.add_argument('--max-acc', type=parse_acc,
                     help="most luck items you own, as A/B (type A: Thief Ring, Ebisu Raiment; type B: Soul Eater Ring); "
-                         "default: maxacc= in want.txt, else 2/2 limited by what your character can equip")
+                         "default: 2/2 limited by what your character can equip")
     ap.add_argument('--max-luck', type=int,
-                    help='highest LCK you can reach with gear swaps (default: maxluck= in want.txt, else current + 40)')
+                    help='highest LCK you can reach with gear swaps (default: current + 40)')
     args = ap.parse_args()
 
+    args.warn = ''
+    SETTINGS['wants'] = [split_who(w) for w in args.want or []]
+    you = {}
+    if args.max_luck is not None:
+        you['maxluck'] = str(args.max_luck)
+    if args.max_acc:
+        you['maxacc'] = '%d/%d' % (args.max_acc if isinstance(args.max_acc, tuple) else parse_acc(args.max_acc))
+    if you:
+        SETTINGS['players']['you'] = you
+    if args.serve:
+        serve(args.serve)
     names = load_names()
-    m, chests, last_scan, last_out = Mem(), [], 0.0, None
+    m, chests, last_scan, last_out = None, [], 0.0, None
     bases, rang = set(), None    # stage seeds seen this run (= reroll count); base the bell last rang on
+    last_emit, changed, last_text = 0.0, time.time(), None
+
+    def show(state, out, rows=()):
+        """Print a frame when it changed; in --json mode also a heartbeat every few seconds."""
+        nonlocal last_out, last_text, last_emit, changed
+        flat = [o.replace('\a', '') for o in out]
+        if args.json or args.serve:
+            key = [state, flat, list(rows), args.warn]
+            if key != last_out:
+                changed, last_out = time.time(), key
+            elif time.time() - last_emit < 3:
+                return
+            head = flat[0] if state == 'live' and len(flat) > 1 and not flat[0].startswith('BOSS') else ''
+            global LATEST
+            LATEST = ({'state': state, 'note': flat[0] if state != 'live' else '',
+                           'head': head.split('\n')[0], 'warn': args.warn,
+                           'changed': changed, 'at': time.time(), 'rows': list(rows)})   # swapped whole: the web thread reads it
+            if args.json:
+                print(json.dumps(LATEST), flush=True)
+            last_emit = time.time()
+        if not args.json and flat != last_text:
+            print('\033[2J\033[H' + time.strftime('%H:%M:%S') + '\n' + '\n'.join(out), flush=True)
+            last_text = flat
+
     while True:
         now = time.time()
         if now - last_scan > args.rescan:
+            # Attach, and reattach when the game restarts: the old process's memory goes stale.
+            try:
+                pid = Mem._find_pid()
+            except SystemExit as e:
+                if args.once:
+                    raise
+                m, chests = None, []
+                show('waiting', [f'{e}; waiting for it to start'])
+                time.sleep(max(args.interval, 2))
+                continue
+            if m is None or m.pid != pid:
+                try:
+                    m = Mem(pid)
+                except (SystemExit, OSError):
+                    m = None    # just started; its memory isn't mapped yet
+                    show('waiting', ['the game is starting; waiting for its memory'])
+                    time.sleep(max(args.interval, 2))
+                    continue
             chests, last_scan = scan_chests(m, args.lo, args.hi), now
         ensure_names(m, names)
-        args.wants, args.luck_cap, args.acc_cap = want_list(args)
-        hits = []
+        with SETTINGS_LOCK:
+            args.wants, args.luck_cap, args.acc_cap = want_list(args)
+        hits, args.rows, args.warn = [], [], ''
+
         out = report(m, chests, args, names, hits) or ['no unopened boss chest in this stage yet']
         if args.wants and out[0].startswith('BOSS'):
             try:
@@ -603,7 +1045,7 @@ def main():
                 base = None
             bases.add(base)
             sure = [h for h in hits if h[2] is True]
-            reach = [h[2][6:] for h in hits if isinstance(h[2], str) and h[2].startswith('reach:')]
+            reach = [(h[0], h[2][6:]) for h in hits if isinstance(h[2], str) and h[2].startswith('reach:')]
             far = [h[2][4:] for h in hits if isinstance(h[2], str) and h[2].startswith('far:')]
             hits = [h for h in hits if h[2] is False]
             if sure:
@@ -613,25 +1055,27 @@ def main():
                     head += '\a'
                     rang = base
             elif reach:
-                head = (f'+++ TARGET REACHABLE (load #{len(bases)}): change gear BEFORE touching the chest. '
-                        + reach[0])
+                who = ' | '.join(text if nm == 'you' else f'{nm} should: {text}' for nm, text in reach)
+                head = f'+++ TARGET REACHABLE (load #{len(bases)}): change gear BEFORE touching the chest. ' + who
             elif hits:
                 who = ', '.join(f'{nm} might get {names.get(it, hex(it))}' for nm, it, _ in hits)
                 head = f'??? TARGET POSSIBLE (load #{len(bases)}): {who}, depending on their Luck'
             else:
-                head = f'--- no target this load (#{len(bases)}); reload. Want: {", ".join(args.wants)}'
+                head = f'--- no target this load (#{len(bases)}); reload. Want: {fmt_wants(args.wants)}'
                 if far:
-                    head += f' ({far[0]})'
-            unknown = [w for w in args.wants if not any(w in v.lower() for v in names.values())]
+                    head += f' ({"; ".join(far)})'
+            unknown = [w for _, w in args.wants if not any(squash(w) in squash(v) for v in names.values())]
             if unknown and names:
+                args.warn = f'No item is named like: {", ".join(unknown)}'
                 head += f'\n    (no item name contains: {", ".join(unknown)})'
             out = [head] + out
         if args.once:
-            print('\n'.join(out).replace('\a', ''))
+            if args.json:
+                print(json.dumps({'state': 'live' if args.rows else 'no chest', 'rows': args.rows}))
+            else:
+                print('\n'.join(out).replace('\a', ''))
             return
-        if out != last_out:
-            print('\033[2J\033[H' + time.strftime('%H:%M:%S') + '\n' + '\n'.join(out), flush=True)
-            last_out = [o.replace('\a', '') for o in out]
+        show('live' if args.rows else 'no chest', out, args.rows)
         time.sleep(args.interval)
 
 

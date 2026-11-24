@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Boss Chest</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header>
+    <h1>Boss chest</h1>
+    <p id="status" class="status off">Connecting…</p>
+    <p id="updated" class="muted"></p>
+    <p id="head" class="head" hidden></p>
+    <p id="warn" class="warn" hidden></p>
+  </header>
+
+  <main>
+    <table>
+      <thead>
+        <tr>
+          <th>Player</th>
+          <th>Character</th>
+          <th class="num">Luck</th>
+          <th>Desired drop</th>
+          <th>Can manipulate</th>
+          <th>Expected drop</th>
+        </tr>
+      </thead>
+      <tbody id="rows">
+        <tr><td colspan="6" class="muted">No players yet. They show up once you're in a stage with a boss chest.</td></tr>
+      </tbody>
+    </table>
+
+    <section id="lists"></section>
+  </main>
+</body>
+</html>

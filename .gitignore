@@ -5,3 +5,6 @@ __pycache__/
 *.pyc
 # Engine-written type declarations for the mod
 sidebar-mod/.claude-plugin/types/
+# Local logs: your own chests and drop reports
+chests.jsonl
+observations.json
