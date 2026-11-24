@@ -894,9 +894,21 @@ def serve(port):
             # Only this page and the sidebar may write: a JSON body (other sites can't send one
             # without a CORS preflight, which this server never answers) from a localhost origin.
             origin = self.headers.get('Origin', '')
-            if (self.path != '/set' or 'application/json' not in self.headers.get('Content-Type', '')
+            if (self.path not in ('/set', '/quit') or 'application/json' not in self.headers.get('Content-Type', '')
                     or not origin.startswith(('http://localhost:', 'http://127.0.0.1:'))):
                 return self.send_error(403)
+            if self.path == '/quit':    # the page's Stop button: answer, then end the whole watcher
+                import sys
+                body = json.dumps({'ok': True, 'said': 'Watcher stopped.'}).encode()
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                self.wfile.flush()
+                print('stopped from the web page', file=sys.stderr, flush=True)
+                threading.Timer(0.3, os._exit, (0,)).start()
+                return
             try:
                 req = json.loads(self.rfile.read(min(int(self.headers.get('Content-Length', 0)), 4096)))
                 with SETTINGS_LOCK:
@@ -918,13 +930,22 @@ def serve(port):
         def log_message(self, *a):
             pass
 
-    try:
-        srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler)
-    except OSError as e:
+    def run():
+        # Keep trying: a watcher being replaced can hold the port for a moment.
         import sys
-        print(f'web page not started: port {port}: {e}', file=sys.stderr, flush=True)
-        return
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+        warned = False
+        while True:
+            try:
+                srv = http.server.ThreadingHTTPServer(('127.0.0.1', port), Handler)
+                break
+            except OSError as e:
+                if not warned:
+                    print(f'web page waiting for port {port}: {e}', file=sys.stderr, flush=True)
+                    warned = True
+                time.sleep(2)
+        srv.serve_forever()
+
+    threading.Thread(target=run, daemon=True).start()
 
 
 def enable_console():

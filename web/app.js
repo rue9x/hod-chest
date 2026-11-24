@@ -223,4 +223,18 @@ async function poll() {
   }
 }
 
+// Ends the watcher process (and this page's server). /chest in Claude Code, or running
+// chest_watch.py again, starts it back up; settings reset.
+$('stop').addEventListener('click', async () => {
+  if (!confirm('Stop the watcher? The page goes offline and settings reset. /chest starts it again.')) return;
+  const btn = $('stop');
+  btn.disabled = true;
+  try {
+    await fetch('quit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  } catch {
+    // it may close the connection as it exits
+  }
+  btn.textContent = 'Stopped';
+});
+
 poll();

@@ -194,7 +194,12 @@ async function start($: Api) {
     const end = await proc.result.catch(() => undefined)
     const why = end?.signal ? `signal ${end.signal}` : `code ${end?.code}`
     const err = errTail.trim().split('\n').slice(-3).join(' | ')
-    await setStatus($, `watcher exited (${why})${err ? ': ' + err : ''}. /chest restarts it`)
+    if (errTail.includes('stopped from the web page')) {
+      // Stopped on purpose: don't bring it back on a mod reload, only on /chest.
+      await update($, watch, w => ({ ...w, active: false, status: 'stopped from the web page; /chest starts it again' }))
+    } else {
+      await setStatus($, `watcher exited (${why})${err ? ': ' + err : ''}. /chest restarts it`)
+    }
   } catch (err) {
     await setStatus($, `watcher failed: ${String(err)}`)
   } finally {

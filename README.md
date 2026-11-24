@@ -27,10 +27,28 @@ No game assets or binaries are included. Everything is read from your own runnin
 On Windows, use `py` or `python` wherever this README says `python3`. The live view works in
 Windows Terminal and in the classic console, and item names print as UTF-8 either way.
 
+## Quick start
+
+It's a standalone Python app. Claude Code is not needed; the sidebar mod below is optional.
+
+```
+python3 chest_watch.py --serve 8765
+```
+
+Then open http://localhost:8765/ in a browser. That's the full app: live status, a row per player,
+desired-drop dropdowns, settings, drop lists and a Stop button. Settings can also be given at
+start-up:
+
+```
+python3 chest_watch.py --serve 8765 --want "you: Valmanway +1" --max-luck 33 --max-acc 1/0
+```
+
+On Windows, use `py chest_watch.py --serve 8765`.
+
 ## Use
 
 ```
-python3 chest_watch.py           # live view; refreshes when anything changes
+python3 chest_watch.py           # text view in the terminal; refreshes when anything changes
 python3 chest_watch.py --once    # one snapshot
 python3 chest_watch.py --all     # every unopened chest, not just the boss chest
 python3 chest_watch.py --json    # one JSON record per refresh: status plus a row per player
@@ -73,7 +91,10 @@ player's settings are:
 | Luck (friends) | Overrides the Luck read from the game |
 | Owns every luck item, Luck with no luck gear (friends) | Suggest whole outfits instead of Luck ranges (see below) |
 
-Only the page itself can change settings; requests from other websites are refused. The page is
+**Stop watcher**, at the top of the page, ends the watcher and the page with it (settings reset).
+`/chest` or running `chest_watch.py` again starts it back up.
+
+Only the page itself can change settings or stop the watcher; requests from other websites are refused. The page is
 `web/index.html`, `web/style.css` and `web/app.js`.
 
 ### Co-op
@@ -154,6 +175,10 @@ game's text resources and reading the item databases from memory. After buying n
 `python3 gen_item_names.py` while in a stage to refresh it.
 
 ### Claude Code sidebar (optional)
+
+You don't need this to use the predictor: it only adds a pane beside the chat and `/chest`
+commands, and runs the same `chest_watch.py --serve 8765` for you. Everything `/chest` does can be
+done on the web page.
 
 `sidebar-mod/` is a Claude Code mod that shows the live prediction in a pane beside the chat. Keep
 it inside this folder: it runs `../chest_watch.py` (or `chest_watch.py` in the folder Claude Code was

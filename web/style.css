@@ -145,3 +145,23 @@ select {
 .field input[type="checkbox"] { width: 18px; height: 18px; margin: 4px 0; }
 
 .field select { font-size: 14px; }
+
+.title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.stop {
+  padding: 6px 12px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--off);
+  background: var(--panel);
+  border: 1px solid var(--off);
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.stop:disabled { opacity: 0.6; cursor: default; }
