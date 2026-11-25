@@ -32,7 +32,7 @@ trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/cheats"
 cp "$HERE"/*.py "$HERE/hod-chest.spec" "$work/"
 cp -r "$HERE/web" "$work/"
-cp "$HERE"/cheats/*.py "$work/cheats/"
+cp "$HERE"/cheats/*.py "$HERE/cheats/positions_default.json" "$work/cheats/"
 (cd "$work" && wine "$PY" -m PyInstaller --noconfirm hod-chest.spec >/dev/null 2>&1)
 
 mkdir -p "$HERE/dist"

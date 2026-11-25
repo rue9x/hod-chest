@@ -20,7 +20,10 @@ On the web page (`chest_watch.py --serve`, or the sidebar's http://localhost:876
 section lists every saved position: pick one and press **Activate** to move there. Save new ones
 with the `save` command above; the list picks them up within a few seconds.
 
-Saved positions go in `cheats/positions.json`, which stays on your computer (it's in `.gitignore`).
+The start and end of chapters 1 to 11 ship with hod-chest in `cheats/positions_default.json` (in
+the repository and inside the `.exe`). Positions you save yourself go in `cheats/positions.json`,
+which stays on your computer (it's in `.gitignore`), and show up alongside them; a name you save
+yourself replaces the shipped one.
 A position only means something in the stage it was saved in.
 
 What was found by testing in Chapter 10 with Soma:

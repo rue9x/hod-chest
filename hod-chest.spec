@@ -1,12 +1,13 @@
 # PyInstaller build for hod-chest: one file, hod-chest.exe on Windows (hod-chest elsewhere).
 #   pip install pyinstaller
 #   pyinstaller hod-chest.spec          -> dist/hod-chest(.exe)
-# The GitHub Actions workflow (.github/workflows/build.yml) runs this on Windows.
+# On Linux, ./build_exe.sh runs this with Windows Python under Wine.
 
 a = Analysis(
     ['hod_chest.py'],
     pathex=['.'],
-    datas=[('web', 'web')],                         # the page, served from inside the app
+    datas=[('web', 'web'),                          # the page, served from inside the app
+           ('cheats/positions_default.json', 'cheats')],   # the shipped chapter positions
     # Loaded by name at run time (cheats from the page; item names on first run), so list them.
     hiddenimports=['cheats.positions', 'cheats.loot', 'cheats.mastery', 'cheats.health',
                    'gen_item_names', 'build_names', 'txrc', 'pool'],
