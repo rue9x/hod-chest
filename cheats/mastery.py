@@ -28,12 +28,6 @@ MAX = 99999
 CANCEL = threading.Event()  # set by Deactivate: a waiting max_next stops without changing anything
 
 
-def game_file(m):
-    if sys.platform == 'win32':
-        raise SystemExit('changing mastery is only supported on Linux for now')
-    return next(l.split()[5] for l in open(f'/proc/{m.pid}/maps') if 'xenia_memory' in l)
-
-
 def points(m):
     return list(struct.unpack(f'>{SLOTS}I', m.read(POINTS, 4 * SLOTS)))
 
@@ -65,10 +59,7 @@ def max_next(m, wait=60.0, said=print):
         now = points(m)
         for i, (a, b) in enumerate(zip(before, now)):
             if b > a:
-                addr = POINTS + 4 * i
-                with open(game_file(m), 'r+b') as fh:
-                    fh.seek(m.off(addr, 4))
-                    fh.write(struct.pack('>I', MAX))
+                m.write_u32(POINTS + 4 * i, MAX)
                 return f'Maxed sub-weapon slot {i} ({b} -> {MAX} points, 8 bars).'
         before = [max(a, b) for a, b in zip(before, now)]
     return f'No sub-weapon hit in {wait:.0f} s, so nothing was changed. Activate it again and hit something.'

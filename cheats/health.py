@@ -40,16 +40,11 @@ def fill(m, what='hp'):
     what = what.lower()
     if what not in STATS:
         raise ValueError(f'fill takes hp or mp, not {what!r}')
-    if sys.platform == 'win32':
-        raise ValueError('filling HP and MP is only supported on Linux for now')
     s = stats(m)
     now, top = read(m, s, what)
     if not 0 < top < 1e6:
         raise ValueError(f"max {what.upper()} reads as {top}; not touching it")
-    path = next(l.split()[5] for l in open(f'/proc/{m.pid}/maps') if 'xenia_memory' in l)
-    with open(path, 'r+b') as fh:
-        fh.seek(m.off(s + STATS[what][0], 4))
-        fh.write(struct.pack('>f', top))
+    m.write_f32(s + STATS[what][0], top)
     return f'{what.upper()} filled: {now:.0f} -> {top:.0f}.'
 
 

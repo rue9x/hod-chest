@@ -1,8 +1,11 @@
-"""Read Harmony of Despair Recomp guest (Xbox 360) memory, read-only.
+"""Read Harmony of Despair Recomp guest (Xbox 360) memory, and write it for the cheats.
 
 Linux: maps xenia's /dev/shm/xenia_memory_* backing file (no root or ptrace needed).
 Windows: ReadProcessMemory on the game process (same user, no admin needed).
 Guest address A lives at host address MEMBASE + A in the game process.
+
+The predictor only ever reads. write() is for cheats/ alone: on Linux it writes the same backing
+file, on Windows it uses WriteProcessMemory with a separate handle opened only when first needed.
 """
 import os, re, struct, subprocess, sys
 
@@ -13,6 +16,8 @@ XEX_BASE = 0x82000000          # the game's PE image starts here ("MZ")
 
 
 class _Reads:
+    def write_u32(self, a, v): self.write(a, struct.pack('>I', v))
+    def write_f32(self, a, v): self.write(a, struct.pack('>f', v))
     def u8(self, a): return self.read(a, 1)[0]
     def u16(self, a): return struct.unpack('>H', self.read(a, 2))[0]
     def s16(self, a): return struct.unpack('>h', self.read(a, 2))[0]
@@ -29,6 +34,7 @@ class _LinuxMem(_Reads):
         path, self.regions = self._maps()
         if not path:
             raise SystemExit('could not find the game memory mapping')
+        self.path = path
         fd = os.open(path, os.O_RDONLY)
         try:
             self.mm = mmap.mmap(fd, 0, prot=mmap.PROT_READ)
@@ -64,6 +70,13 @@ class _LinuxMem(_Reads):
 
     def close(self):
         self.mm.close()
+
+    def write(self, addr, data):
+        """Write bytes at a guest address (cheats only), through the game's memory backing file."""
+        o = self.off(addr, len(data))
+        with open(self.path, 'r+b') as fh:
+            fh.seek(o)
+            fh.write(data)
 
     @staticmethod
     def _find_pid():
@@ -122,7 +135,10 @@ class _WindowsMem(_Reads):
         k.VirtualQueryEx.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p, ctypes.c_size_t]
         k.VirtualQueryEx.restype = ctypes.c_size_t
         k.CloseHandle.argtypes = [wintypes.HANDLE]
+        k.WriteProcessMemory.argtypes = [wintypes.HANDLE, ctypes.c_void_p, ctypes.c_void_p,
+                                         ctypes.c_size_t, ctypes.POINTER(ctypes.c_size_t)]
         self.k = k
+        self.hw = None      # write handle, opened by the first write() (cheats only)
         self.pid = pid or self._find_pid()
         self.h = k.OpenProcess(0x0400 | 0x0010, False, self.pid)   # QUERY_INFORMATION | VM_READ
         if not self.h:
@@ -187,6 +203,22 @@ class _WindowsMem(_Reads):
         if self.h:
             self.k.CloseHandle(self.h)
             self.h = None
+        if self.hw:
+            self.k.CloseHandle(self.hw)
+            self.hw = None
+
+    def write(self, addr, data):
+        """Write bytes at a guest address (cheats only), with WriteProcessMemory."""
+        ct = self.ct
+        if not self.hw:     # VM_WRITE | VM_OPERATION; the read handle never gets write access
+            self.hw = self.k.OpenProcess(0x0020 | 0x0008, False, self.pid)
+            if not self.hw:
+                raise ValueError(f"can't open the game for writing (error {ct.get_last_error()})")
+        buf = ct.create_string_buffer(bytes(data), len(data))
+        done = ct.c_size_t()
+        if not self.k.WriteProcessMemory(self.hw, ct.c_void_p(self.base + addr), buf, len(data),
+                                         ct.byref(done)) or done.value != len(data):
+            raise ValueError(f"couldn't write guest addr {addr:08X} (error {ct.get_last_error()})")
 
     def read(self, addr, n):
         data = self._raw(self.base + addr, n)

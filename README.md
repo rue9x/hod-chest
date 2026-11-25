@@ -35,8 +35,9 @@ press **Stop watcher** on the page) to quit. No Python needed. It keeps its file
 chest log, saved cheat positions) in the folder it's in. Any `chest_watch.py` option works after
 it, e.g. `hod-chest.exe --want "you: Valmanway +1"`.
 
-The Windows build is new and hasn't been tried against the game on Windows yet. The cheats change
-the game on Linux only for now; on Windows they say so.
+The Windows build is new and hasn't been tried against the game on Windows yet. The cheats work on
+both systems (on Windows through `WriteProcessMemory`), but on Windows they're untested with the
+game too.
 
 To build it yourself: `./build_exe.sh` on Linux (uses Wine; it fetches Windows Python from
 python.org on first run), or `pip install pyinstaller` then `pyinstaller hod-chest.spec` on

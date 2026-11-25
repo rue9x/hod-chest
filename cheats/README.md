@@ -2,7 +2,8 @@
 
 Tools that **write to the game**, kept apart from the predictor, which only ever reads it.
 Use them solo: in co-op your game sends your position to the others, and a write can desync the
-session. Linux only for now.
+session. They work on Linux (tested with the game) and Windows (written with `WriteProcessMemory`;
+tested under Wine, not yet with the game on Windows).
 
 ## Positions (`positions.py`)
 

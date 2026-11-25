@@ -41,14 +41,9 @@ def read_pos(m, obj):
 
 def write_pos(m, obj, pos):
     """Write every copy, so the game doesn't put the old position back."""
-    if sys.platform == 'win32':
-        raise SystemExit('moving is only supported on Linux for now')
-    path = next(l.split()[5] for l in open(f'/proc/{m.pid}/maps') if 'xenia_memory' in l)
-    with open(path, 'r+b') as fh:
-        for offs, vals in ((X_COPIES, pos['x']), (Y_COPIES, pos['y'])):
-            for off, v in zip(offs, vals):
-                fh.seek(m.off(obj + off, 4))
-                fh.write(struct.pack('>f', v))
+    for offs, vals in ((X_COPIES, pos['x']), (Y_COPIES, pos['y'])):
+        for off, v in zip(offs, vals):
+            m.write_f32(obj + off, v)
 
 
 def natural(name):

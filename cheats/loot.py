@@ -9,7 +9,7 @@ Normal chests are every chest except the boss chest and gold chests. Each chest 
 makes any roll give it. The original items are saved to cheats/loot_backup.json first, for `undo`
 (which only works in the same stage, before those chests are opened).
 """
-import json, os, struct, sys
+import json, os, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))      # the predictor's modules, one folder up
@@ -21,10 +21,9 @@ BACKUP = paths.cheat_file('loot_backup.json')   # next to the .exe when packaged
 SKIP_TYPES = {4, 2}     # boss chest, gold chest (cw.CHEST_TYPES)
 
 
-def game_file(m):
-    if sys.platform == 'win32':
-        raise SystemExit('changing chests is only supported on Linux for now')
-    return next(l.split()[5] for l in open(f'/proc/{m.pid}/maps') if 'xenia_memory' in l)
+def stage_base(m):
+    """This stage load's seed base: a backup from another load must not be written back."""
+    return m.u32(m.u32(cw.HANDLE_TABLE) + cw.SEED_BASE)
 
 
 def chests(m, everything=False):
@@ -63,21 +62,21 @@ def set_loot(m, name, everything=False):
     found = chests(m, everything)
     if not found:
         raise ValueError('no unopened chests in this stage')
+    base = stage_base(m)
     try:                        # keep the first originals: a second set mustn't save its own items
         with open(BACKUP, encoding='utf-8') as fh:
-            backup = json.load(fh)
-    except (FileNotFoundError, ValueError):
+            saved = json.load(fh)
+        backup = saved.get('entries', {}) if saved.get('base') == base else {}   # another load's: stale
+    except (FileNotFoundError, ValueError, AttributeError):
         backup = {}
     for _, pairs in found:
         for q in pairs:
             backup.setdefault(f'{q:#x}', m.u32(q))
     with open(BACKUP, 'w', encoding='utf-8') as fh:
-        json.dump(backup, fh)
-    with open(game_file(m), 'r+b') as fh:
-        for _, pairs in found:
-            for q in pairs:
-                fh.seek(m.off(q, 4))
-                fh.write(struct.pack('>I', item))
+        json.dump({'base': base, 'entries': backup}, fh)
+    for _, pairs in found:
+        for q in pairs:
+            m.write_u32(q, item)
     which = 'chests' if everything else 'normal chests'
     return f'{len(found)} {which} now drop {names.get(item, hex(item))}'
 
@@ -86,18 +85,19 @@ def reset(m):
     """Put back what the chests held before set_loot. Returns a message."""
     try:
         with open(BACKUP, encoding='utf-8') as fh:
-            backup = json.load(fh)
-    except FileNotFoundError:
+            saved = json.load(fh)
+    except (FileNotFoundError, ValueError):
         return 'Nothing to reset: the chests hold what the game gave them.'
+    if not isinstance(saved, dict) or saved.get('base') != stage_base(m):
+        os.remove(BACKUP)       # from another stage load: those addresses hold something else now
+        return 'Nothing to reset: the stage has reloaded since, so the chests are the game\'s own again.'
     put = 0
-    with open(game_file(m), 'r+b') as fh:
-        for q, item in backup.items():
-            try:
-                fh.seek(m.off(int(q, 16), 4))
-            except ValueError:
-                continue            # that chest's memory is gone (new stage)
-            fh.write(struct.pack('>I', item))
-            put += 1
+    for q, item in saved.get('entries', {}).items():
+        try:
+            m.write_u32(int(q, 16), item)
+        except ValueError:
+            continue                # that chest's memory is gone
+        put += 1
     os.remove(BACKUP)
     return f'Chests reset ({put} entries put back).'
 
