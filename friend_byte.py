@@ -17,7 +17,8 @@ import pool
 from gmem import Mem
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CHESTS, OBS = os.path.join(HERE, 'chests.jsonl'), os.path.join(HERE, 'observations.json')
+import paths                                    # noqa: E402
+CHESTS, OBS = os.path.join(paths.DATA, 'chests.jsonl'), os.path.join(paths.DATA, 'observations.json')
 
 
 def load_chests():

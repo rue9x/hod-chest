@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.dirname(HERE))      # the predictor's modules, one fo
 import chest_watch as cw                        # noqa: E402
 from gmem import Mem                            # noqa: E402
 
-BACKUP = os.path.join(HERE, 'loot_backup.json')
+import paths                                    # noqa: E402
+BACKUP = paths.cheat_file('loot_backup.json')   # next to the .exe when packaged
 SKIP_TYPES = {4, 2}     # boss chest, gold chest (cw.CHEST_TYPES)
 
 

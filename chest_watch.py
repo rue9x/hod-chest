@@ -18,7 +18,8 @@ BASE = [0x0, 0x1, 0x29, 0x33, 0x227, 0x60F, 0x673, 0x73B, 0x745, 0x80D,
         0x871, 0x8A3, 0x8AD, 0x911, 0x1C99, 0x2081, 0x208B]
 CHEST_TYPES = {1: 'small', 2: 'gold', 3: 'type3', 4: 'BOSS', 5: 'type5', 6: 'type6'}
 OPENED_STATES = {9}       # 2 = waiting for boss, 5 = armed/closed
-NAMES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'item_names.json')
+import paths
+NAMES_FILE = os.path.join(paths.DATA, 'item_names.json')
 
 
 def f32(m, a):
@@ -660,7 +661,7 @@ def chest_snapshot(m, h, c):
             'table': table}
 
 
-CHESTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'chests.jsonl')
+CHESTS_FILE = os.path.join(paths.DATA, 'chests.jsonl')
 
 
 _last_saved = [None]     # (key, base) of the last chest written, so the log is read only once
@@ -1251,7 +1252,7 @@ def report(m, chests, args, names, hits=None):
     return lines
 
 
-WEB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'web')
+WEB_DIR = os.path.join(paths.RES, 'web')     # inside the app when packaged
 WEB_FILES = {'/': ('index.html', 'text/html'), '/index.html': ('index.html', 'text/html'),
              '/app.js': ('app.js', 'text/javascript'), '/style.css': ('style.css', 'text/css')}
 LATEST = {'state': 'waiting', 'note': 'starting', 'rows': [], 'changed': 0, 'at': time.time()}  # newest record, for the page
@@ -1274,8 +1275,8 @@ def cheat_list():
     """Names the page's Cheats dropdown offers: the positions saved with cheats/positions.py."""
     try:
         positions = cheat('positions')
-        return [{'name': n, 'kind': 'position', 'char': p.get('char', '?'),
-                 'x': round(p['x'][0], 1), 'y': round(p['y'][0], 1)} for n, p in positions.load().items()]
+        return [{'name': n, 'kind': 'position', 'x': round(p['x'][0], 1), 'y': round(p['y'][0], 1)}
+                for n, p in positions.load().items()]
     except (ImportError, OSError, ValueError, KeyError, TypeError):
         return []
 
@@ -1285,6 +1286,12 @@ def run_cheat(req):
     {kind: 'mastery'}.
     The writing is all in cheats/; the predictor itself never writes."""
     kind = str(req.get('kind', 'position'))
+    if kind in ('fill-hp', 'fill-mp'):
+        m = Mem()
+        try:
+            return cheat('health').fill(m, kind[-2:])
+        finally:
+            drop(m)
     if kind == 'mastery-cancel':    # the page's Deactivate: stop a waiting 'mastery' (same module: no reload)
         import importlib
         return importlib.import_module('cheats.mastery').cancel()

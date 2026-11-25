@@ -354,7 +354,7 @@ async function loadCheats() {
       for (const c of cheats) {
         const o = document.createElement('option');
         o.value = c.name;
-        o.textContent = `Move to ${c.name} (${c.char}, X ${c.x}, Y ${c.y})`;
+        o.textContent = `Move to ${c.name} (X ${c.x}, Y ${c.y})`;
         sel.append(o);
       }
       if (cheats.some(c => c.name === was)) sel.value = was;
@@ -453,6 +453,8 @@ $('loot-activate').addEventListener('click', () => {
   if (item) runCheat($('loot-activate'), { kind: 'loot', item, all: $('loot-kind').value === 'all' });
 });
 $('loot-reset').addEventListener('click', () => runCheat($('loot-reset'), { kind: 'reset' }));
+$('fill-hp').addEventListener('click', () => runCheat($('fill-hp'), { kind: 'fill-hp' }));
+$('fill-mp').addEventListener('click', () => runCheat($('fill-mp'), { kind: 'fill-mp' }));
 $('mastery-activate').addEventListener('click', async () => {
   $('mastery-deactivate').disabled = false;       // while it waits, it can be called off
   const done = runCheat($('mastery-activate'), { kind: 'mastery' });

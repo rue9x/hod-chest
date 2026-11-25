@@ -34,7 +34,7 @@ let token = ''
 let child: HookStream<ProcessSpawnChunk, ProcessSpawnResult> | undefined
 let startedAt = 0
 const CODE = ['chest_watch.py', 'pool.py', 'gmem.py', 'gen_item_names.py', 'build_names.py', 'txrc.py',
-  'cheats/positions.py', 'cheats/loot.py', 'cheats/mastery.py']
+  'cheats/positions.py', 'cheats/loot.py', 'cheats/mastery.py', 'cheats/health.py']
 
 // True when a Python file the watcher loaded changed after it started.
 async function codeChanged($: Api): Promise<boolean> {

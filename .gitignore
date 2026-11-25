@@ -13,3 +13,7 @@ item_names.json
 # Your saved positions (cheats/positions.py)
 cheats/positions.json
 cheats/loot_backup.json
+# Packaged app builds (build_exe.sh, pyinstaller)
+build/
+dist/
+*.exe

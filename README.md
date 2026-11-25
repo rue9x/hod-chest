@@ -27,6 +27,21 @@ No game assets or binaries are included. Everything is read from your own runnin
 On Windows, use `py` or `python` wherever this README says `python3`. The live view works in
 Windows Terminal and in the classic console, and item names print as UTF-8 either way.
 
+## Windows app
+
+Download `hod-chest.exe` from the repository's **Releases** page and double-click it. It starts the
+watcher and opens the live table at http://localhost:8765/ in your browser; close its window (or
+press **Stop watcher** on the page) to quit. No Python needed. It keeps its files (item names, the
+chest log, saved cheat positions) in the folder it's in. Any `chest_watch.py` option works after
+it, e.g. `hod-chest.exe --want "you: Valmanway +1"`.
+
+The Windows build is new and hasn't been tried against the game on Windows yet. The cheats change
+the game on Linux only for now; on Windows they say so.
+
+To build it yourself: `./build_exe.sh` on Linux (uses Wine; it fetches Windows Python from
+python.org on first run), or `pip install pyinstaller` then `pyinstaller hod-chest.spec` on
+Windows. Either way the result is `dist/hod-chest.exe`.
+
 ## Quick start
 
 It's a standalone Python app. Claude Code is not needed; the sidebar mod below is optional.

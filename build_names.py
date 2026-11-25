@@ -43,7 +43,8 @@ def main():
         if entry:
             cat, idx, name = entry.split(' ', 2)
             names[f'0x{BASE[int(cat, 16)] + int(idx, 16):X}'] = name
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'item_names.json')
+    import paths
+    path = os.path.join(paths.DATA, 'item_names.json')
     try:
         with open(path, encoding='utf-8') as fh:
             have = len(json.load(fh))

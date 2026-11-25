@@ -11,7 +11,8 @@ from chest_watch import BASE
 from gmem import Mem
 from txrc import decode_bytes
 
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'item_names.json')
+import paths
+OUT = os.path.join(paths.DATA, 'item_names.json')
 TEXT_MGR = 0x8291D9DC   # -> {?, slots_begin, slots_end}; slot N = textresNN (0 = base game)
 # DB global: (magic, item category, record stride, name-field offset, text section)
 DBS = {0x8291D970: (b'WEPN', 3, 0x96, 0x3A, 0), 0x8291D984: (b'GURD', 4, 0x4E, 0x02, 2),

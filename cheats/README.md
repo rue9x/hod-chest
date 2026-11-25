@@ -9,10 +9,8 @@ session. Linux only for now.
 Save where your character stands and move back there, or move by a set amount.
 
 ```
-python3 cheats/positions.py save Ch10_start   # remember where you are now
-python3 cheats/positions.py go Ch10_start     # move back there
-python3 cheats/positions.py up 1000           # move up 1000 (negative moves down)
-python3 cheats/positions.py right 50          # move right 50 (negative moves left)
+python3 cheats/positions.py save ch10_start   # remember where you are now
+python3 cheats/positions.py go ch10_start     # move back there
 python3 cheats/positions.py list              # saved positions
 python3 cheats/positions.py where             # where you are now
 ```
@@ -73,3 +71,16 @@ sub-weapon. Every character's sub-weapons share one table; tested and working fo
 (slots 90-106), Julius (140 on), Richter (190-195), Simon (440-445),
 Getsu Fuma (507-509), Yoko (340-342), Maria (390-394) and Shanoa (240-246). Found in Chapter 10 with Jonathan: setting the Bible's points to 99999 showed 8 bars, and
 **Activate** then maxed the next sub-weapon used.
+
+## Health and MP (`health.py`)
+
+```
+python3 cheats/health.py fill       # HP to your current max
+python3 cheats/health.py fill mp    # MP to your current max
+python3 cheats/health.py show       # HP and MP, with their max
+```
+
+On the page, **Health → Fill HP / Fill MP** do the same. HP and MP are floats in the player's stats
+block; the game clamps each every frame to a base max plus the equipment bonus, so filling sets it
+to exactly that. Found with Soma: HP 256 of 300 + 24 (writing 1000 settled at 324), and MP
+refilling to 100 + 18.
